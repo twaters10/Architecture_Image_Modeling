@@ -7,7 +7,7 @@ from utils.google_image_scrapper_utils import *
 search_query = input("Enter your Google Images search query: ")
 
 # Create the 'imgs/' directory if it doesn't exist
-download_path = f"../architectural_style_images/{search_query}"
+download_path = f"/Users/tawate/.cache/kagglehub/datasets/wwymak/architecture-dataset/versions/1/arcDataset/{search_query}"
 os.makedirs(download_path, exist_ok=True)
 
 # Create a Chrome driver
@@ -22,6 +22,7 @@ driver.get(search_url)
 # Perform image scraping and downloading
 urls = get_images_from_google(driver, 2, 10)
 
+# Download each image to the specified directory with a random alpha numeric filename
 for i, url in enumerate(urls):
     download_image(download_path, url, generate_random_string() + ".jpg")
 

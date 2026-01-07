@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 /architectural_style_images/
+/models/yolo/
+/conf/apikeys.yaml

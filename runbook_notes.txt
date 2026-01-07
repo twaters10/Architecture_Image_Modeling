@@ -1,0 +1,8 @@
+01_image_scrapper.py 
+    - scrapes a number of images per house style from goodle using serpapi
+    - prompts the user for the api key, csv file containing the house styles of interest, and the number of images per house style to scrape
+
+01a_image_cleanup.py
+    - removes records that cannot be opened (corrupted)
+    - finds near duplciate images within each house style folder and removes the duplciate
+    - prompts the user for the threshold value. lower means the images have to be more similar to flag as a duplicate.
