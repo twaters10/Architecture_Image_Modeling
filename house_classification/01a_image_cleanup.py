@@ -107,7 +107,7 @@ def get_user_input():
     
     while True:
         try:
-            threshold = int(input("Enter similarity threshold (0-20, recommended 5): ").strip())
+            threshold = int(input("Enter similarity threshold (0-20, recommended 5-7): ").strip())
             if 0 <= threshold <= 20:
                 break
             else:
