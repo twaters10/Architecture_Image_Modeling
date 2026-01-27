@@ -7,3 +7,6 @@ __pycache__/
 /conf/apikeys.yaml
 ~*
 Documentation/Residential_Architectural_Styles_Illustrated.docx
+checkpoints/
+conf/
+data/
