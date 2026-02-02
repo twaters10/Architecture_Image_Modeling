@@ -37,10 +37,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from tqdm import tqdm
 
 # Local imports
-from config import load_config, get_training_config, get_data_paths
-from data_loaders import get_data_loaders
+from utils.config import load_config, get_training_config, get_data_paths
+from utils.data_loaders import get_data_loaders
 from model import VanillaCNN, get_pretrained_model, count_parameters
 
 
@@ -64,7 +65,8 @@ def train_one_epoch(
     train_loader: torch.utils.data.DataLoader,
     criterion: nn.Module,
     optimizer: optim.Optimizer,
-    device: torch.device
+    device: torch.device,
+    epoch: int = 0
 ) -> Tuple[float, float]:
     """
     Train the model for one epoch.
@@ -75,6 +77,7 @@ def train_one_epoch(
         criterion: Loss function.
         optimizer: Optimizer for updating weights.
         device: Device to run training on.
+        epoch: Current epoch number (for progress bar display).
 
     Returns:
         Tuple of (average_loss, accuracy) for the epoch.
@@ -84,7 +87,10 @@ def train_one_epoch(
     correct = 0
     total = 0
 
-    for batch_idx, (images, labels) in enumerate(train_loader):
+    # Create progress bar for batches
+    pbar = tqdm(train_loader, desc=f"Epoch {epoch} [Train]", leave=False)
+
+    for images, labels in pbar:
         images, labels = images.to(device), labels.to(device)
 
         # Forward pass
@@ -102,10 +108,12 @@ def train_one_epoch(
         total += labels.size(0)
         correct += predicted.eq(labels).sum().item()
 
-        # Print progress every 10 batches
-        if (batch_idx + 1) % 10 == 0:
-            print(f"    Batch {batch_idx + 1}/{len(train_loader)} - "
-                  f"Loss: {loss.item():.4f}")
+        # Update progress bar with current metrics
+        current_acc = 100.0 * correct / total
+        pbar.set_postfix({
+            'loss': f'{loss.item():.4f}',
+            'acc': f'{current_acc:.2f}%'
+        })
 
     epoch_loss = running_loss / total
     epoch_acc = 100.0 * correct / total
@@ -117,7 +125,8 @@ def validate(
     model: nn.Module,
     val_loader: torch.utils.data.DataLoader,
     criterion: nn.Module,
-    device: torch.device
+    device: torch.device,
+    epoch: int = 0
 ) -> Tuple[float, float]:
     """
     Validate the model on the validation set.
@@ -127,6 +136,7 @@ def validate(
         val_loader: DataLoader for validation data.
         criterion: Loss function.
         device: Device to run validation on.
+        epoch: Current epoch number (for progress bar display).
 
     Returns:
         Tuple of (average_loss, accuracy) for the validation set.
@@ -136,8 +146,11 @@ def validate(
     correct = 0
     total = 0
 
+    # Create progress bar for validation batches
+    pbar = tqdm(val_loader, desc=f"Epoch {epoch} [Val]", leave=False)
+
     with torch.no_grad():
-        for images, labels in val_loader:
+        for images, labels in pbar:
             images, labels = images.to(device), labels.to(device)
 
             outputs = model(images)
@@ -147,6 +160,13 @@ def validate(
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
+
+            # Update progress bar with current metrics
+            current_acc = 100.0 * correct / total
+            pbar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'acc': f'{current_acc:.2f}%'
+            })
 
     val_loss = running_loss / total
     val_acc = 100.0 * correct / total
@@ -226,19 +246,20 @@ def train(
 
     start_time = time.time()
 
-    for epoch in range(num_epochs):
+    # Create progress bar for epochs
+    epoch_pbar = tqdm(range(num_epochs), desc="Training Progress", position=0)
+
+    for epoch in epoch_pbar:
         epoch_start = time.time()
         current_lr = optimizer.param_groups[0]['lr']
 
-        print(f"\nEpoch {epoch + 1}/{num_epochs} (LR: {current_lr:.6f})")
-
         # Train
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, criterion, optimizer, device
+            model, train_loader, criterion, optimizer, device, epoch=epoch + 1
         )
 
         # Validate
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        val_loss, val_acc = validate(model, val_loader, criterion, device, epoch=epoch + 1)
 
         # Update scheduler
         scheduler.step(val_loss)
@@ -252,11 +273,17 @@ def train(
 
         epoch_time = time.time() - epoch_start
 
-        print(f"  Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}%")
-        print(f"  Val Loss:   {val_loss:.4f} | Val Acc:   {val_acc:.2f}%")
-        print(f"  Time: {epoch_time:.1f}s")
+        # Update epoch progress bar with metrics
+        epoch_pbar.set_postfix({
+            'train_loss': f'{train_loss:.4f}',
+            'train_acc': f'{train_acc:.2f}%',
+            'val_loss': f'{val_loss:.4f}',
+            'val_acc': f'{val_acc:.2f}%',
+            'lr': f'{current_lr:.6f}'
+        })
 
         # Check for improvement
+        improvement_msg = ""
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_without_improvement = 0
@@ -269,15 +296,23 @@ def train(
                 'val_loss': val_loss,
                 'val_acc': val_acc,
             }, checkpoint_path / "best_model.pth")
-            print(f"  Saved new best model (val_loss: {val_loss:.4f})")
+            improvement_msg = f" [New best model saved!]"
         else:
             epochs_without_improvement += 1
-            print(f"  No improvement for {epochs_without_improvement} epochs")
+            improvement_msg = f" [No improvement: {epochs_without_improvement}/{patience}]"
+
+        # Write detailed epoch info above progress bar
+        tqdm.write(f"Epoch {epoch + 1}/{num_epochs} - "
+                   f"Train: {train_loss:.4f}/{train_acc:.2f}% - "
+                   f"Val: {val_loss:.4f}/{val_acc:.2f}% - "
+                   f"Time: {epoch_time:.1f}s{improvement_msg}")
 
         # Early stopping
         if epochs_without_improvement >= patience:
-            print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+            tqdm.write(f"\nEarly stopping triggered after {epoch + 1} epochs")
             break
+
+    epoch_pbar.close()
 
     total_time = time.time() - start_time
     print("-" * 60)
@@ -299,6 +334,46 @@ def train(
     return history
 
 
+def prompt_model_selection() -> str:
+    """
+    Prompt user to select a model architecture interactively.
+
+    Returns:
+        str: Selected model name.
+    """
+    models = {
+        1: ("vanilla", "Vanilla CNN - Simple baseline model built from scratch"),
+        2: ("resnet18", "ResNet-18 - Pretrained, good balance of speed and accuracy"),
+        3: ("resnet34", "ResNet-34 - Pretrained, more parameters than ResNet-18"),
+        4: ("resnet50", "ResNet-50 - Pretrained, largest ResNet for best accuracy"),
+        5: ("efficientnet_b0", "EfficientNet-B0 - Pretrained, efficient architecture"),
+        6: ("mobilenet_v2", "MobileNet-V2 - Pretrained, lightweight for deployment")
+    }
+
+    print("\n" + "=" * 70)
+    print("SELECT MODEL ARCHITECTURE")
+    print("=" * 70)
+    for num, (name, description) in models.items():
+        print(f"{num}. {description}")
+    print("=" * 70)
+
+    while True:
+        try:
+            choice = input(f"\nSelect model (1-{len(models)}): ").strip()
+            choice_num = int(choice)
+            if choice_num in models:
+                selected_model = models[choice_num][0]
+                print(f"Selected: {models[choice_num][1]}")
+                return selected_model
+            else:
+                print(f"Invalid choice. Please enter a number between 1 and {len(models)}.")
+        except ValueError:
+            print(f"Invalid input. Please enter a number between 1 and {len(models)}.")
+        except KeyboardInterrupt:
+            print("\nOperation cancelled by user.")
+            exit(0)
+
+
 def main():
     """Main entry point for training script."""
     # Load config for defaults
@@ -311,10 +386,10 @@ def main():
                     "Default values are loaded from conf/data.yaml."
     )
     parser.add_argument(
-        "--model", type=str, default=config.get("model", {}).get("default", "vanilla"),
+        "--model", type=str, default=None,
         choices=["vanilla", "resnet18", "resnet34", "resnet50",
                  "efficientnet_b0", "mobilenet_v2"],
-        help="Model architecture to use (default from config)"
+        help="Model architecture to use (will prompt if not specified)"
     )
     parser.add_argument(
         "--epochs", type=int, default=train_config["epochs"],
@@ -343,7 +418,11 @@ def main():
 
     args = parser.parse_args()
 
-    print("=" * 60)
+    # Prompt for model selection if not provided via CLI
+    if args.model is None:
+        args.model = prompt_model_selection()
+
+    print("\n" + "=" * 60)
     print("Architectural Style Classification - Training")
     print("=" * 60)
     print("\nConfiguration (from conf/data.yaml, overridden by CLI args):")
@@ -382,7 +461,7 @@ def main():
 
     # Train - use checkpoint path from config
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    checkpoint_dir = paths["checkpoints"] / f"{args.model}_{timestamp}"
+    checkpoint_dir = paths["checkpoints"] / f"{args.model}_ep{args.epochs}_bs{args.batch_size}_lr{args.lr}_{timestamp}"
 
     history = train(
         model=model,

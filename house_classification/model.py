@@ -236,7 +236,6 @@ if __name__ == "__main__":
     print(f"   Total parameters: {params['total']:,}")
     print(f"   Trainable: {params['trainable']:,}")
 
-"""
     # Test forward pass
     dummy_input = torch.randn(2, 3, 224, 224)
     output = model(dummy_input)
@@ -261,5 +260,3 @@ if __name__ == "__main__":
     print(f"   Frozen: {params['frozen']:,}")
 
     print("\nAll models ready!")
-    
-"""

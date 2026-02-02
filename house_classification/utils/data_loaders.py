@@ -39,13 +39,41 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 # Local imports
-from config import (
+from .config import (
     load_config,
     get_data_paths,
     get_data_loader_config,
     get_augmentation_config,
     get_normalization_config,
 )
+
+
+class ConvertImageMode:
+    """
+    Custom transform to handle palette images with transparency.
+
+    Converts palette mode images (mode 'P') with transparency to RGBA,
+    then converts all images to RGB. This prevents the warning:
+    "Palette images with Transparency expressed in bytes should be converted to RGBA images"
+    """
+
+    def __call__(self, img):
+        """
+        Convert image to RGB, handling palette images with transparency.
+
+        Args:
+            img: PIL Image
+
+        Returns:
+            PIL Image in RGB mode
+        """
+        # Convert all non-RGB images directly to RGB
+        # This handles palette images with transparency without triggering warnings
+        # PIL's convert('RGB') internally handles transparency correctly
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        return img
 
 
 def get_train_transforms(
@@ -79,6 +107,7 @@ def get_train_transforms(
     color_jitter = aug_config.get("color_jitter", {})
 
     return transforms.Compose([
+        ConvertImageMode(),  # Handle palette images with transparency
         transforms.RandomResizedCrop(
             image_size,
             scale=tuple(aug_config.get("random_crop_scale", [0.8, 1.0]))
@@ -120,6 +149,7 @@ def get_val_test_transforms(
         norm_config = get_normalization_config()
 
     return transforms.Compose([
+        ConvertImageMode(),  # Handle palette images with transparency
         transforms.Resize(int(image_size * 1.14)),  # Resize to 256 if image_size=224
         transforms.CenterCrop(image_size),
         transforms.ToTensor(),
@@ -161,6 +191,7 @@ def get_data_loaders(
         image_size: Target image size for CNN input. Defaults to config value.
         num_workers: Number of worker processes for data loading. Defaults to config value.
         pin_memory: Whether to pin memory for faster GPU transfer. Defaults to config value.
+            Note: Automatically disabled on MPS/CPU devices (only works with CUDA).
 
     Returns:
         Tuple containing:
@@ -181,6 +212,11 @@ def get_data_loaders(
     image_size = image_size if image_size is not None else loader_config["image_size"]
     num_workers = num_workers if num_workers is not None else loader_config["num_workers"]
     pin_memory = pin_memory if pin_memory is not None else loader_config["pin_memory"]
+
+    # Only use pin_memory with CUDA (not supported on MPS/CPU)
+    # This avoids the warning: "pin_memory argument is set as true but not supported on MPS"
+    if pin_memory and not torch.cuda.is_available():
+        pin_memory = False
 
     # Get data paths from config or parameter
     if data_dir is not None:
