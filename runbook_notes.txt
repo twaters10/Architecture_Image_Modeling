@@ -103,16 +103,17 @@ SECTION 2: MODEL TRAINING
 
 2.1 CONFIGURATION
 -----------------
-Configuration File: conf/data.yaml
+Configuration File: conf/img_class_config.yaml
 Core Modules: house_classification/utils/config.py
               house_classification/utils/data_loaders.py
 
-Edit conf/data.yaml to set default parameters for:
+Edit conf/img_class_config.yaml to set default parameters for:
     - Data paths (train/validation/test directories)
     - Batch size, number of workers, image size
     - Data augmentation settings
     - Training hyperparameters (epochs, learning rate, etc.)
     - Normalization statistics
+    - Model settings (freeze_features, dropout_rate)
 
 All training scripts use these defaults, which can be overridden via CLI.
 
@@ -156,15 +157,17 @@ Full Options:
         --patience 10
 
 Parameters Explained:
-    --model       : Model architecture (vanilla, resnet18, resnet34, resnet50,
-                    efficientnet_b0, mobilenet_v2) - will prompt if not specified
-    --epochs      : Maximum number of training epochs (default: 50)
-    --batch_size  : Number of images per batch (default: 32)
-    --lr          : Learning rate (default: 0.001)
-    --patience    : Early stopping patience - stops if no improvement for N
-                    epochs (default: 10)
-    --resume      : Path to checkpoint to resume training
-    --config      : Path to custom config YAML file
+    --model           : Model architecture (vanilla, resnet18, resnet34, resnet50,
+                        efficientnet_b0, mobilenet_v2) - will prompt if not specified
+    --epochs          : Maximum number of training epochs (default: 50)
+    --batch_size      : Number of images per batch (default: 32)
+    --lr              : Learning rate (default: 0.001)
+    --patience        : Early stopping patience - stops if no improvement for N
+                        epochs (default: 10)
+    --freeze_features : Freeze pretrained layers and only train the classifier head
+                        (default: false from config). Only applies to pretrained models.
+    --resume          : Path to checkpoint to resume training
+    --config          : Path to custom config YAML file
 
 Progress Bars:
     Training now includes tqdm progress bars showing:
@@ -179,8 +182,18 @@ Output:
         - best_model.pth           : Best model based on validation loss
         - final_model.pth          : Final model after all epochs
         - training_history.json    : Loss and accuracy for each epoch
+        - training_diagnostics.txt : Comprehensive training setup report
+        - image_batches/           : Sample augmented training images per class
+            - american_craftsman.png
+            - colonial.png
+            - ... (one file per class)
 
 Note: Checkpoint directory names now include hyperparameters for easy tracking.
+Note: Sample batch visualizations show what the augmented training data looks like
+      with all transformations applied (rotation, flip, color jitter, etc.).
+Note: training_diagnostics.txt contains complete training configuration including
+      dataset statistics, per-class sample counts, augmentation settings, and
+      hyperparameters for reproducibility and analysis.
 
 
 2.3 TRAINING WITH TRANSFER LEARNING (PRETRAINED MODELS)
@@ -212,6 +225,30 @@ Tips for Transfer Learning:
       pretrained weights
     - May need fewer epochs (~30) since starting from pretrained weights
     - Batch size of 32 is a good default; increase if you have more GPU memory
+
+Freeze Features Option (--freeze_features):
+    When enabled, freezes all pretrained layers and only trains the classifier head.
+
+    Use freeze_features when:
+        - You have a small dataset (prevents overfitting)
+        - You want faster training (fewer parameters to update)
+        - Your images are similar to ImageNet (pretrained features work well)
+
+    Don't use freeze_features when:
+        - You have a large dataset
+        - Your images differ significantly from ImageNet
+        - You want maximum accuracy (fine-tuning all layers)
+
+    Example:
+        # Freeze features - only train classifier (faster, fewer params)
+        python train.py --model resnet18 --freeze_features --epochs 20 --lr 0.01
+
+        # Fine-tune all layers (default behavior)
+        python train.py --model resnet18 --epochs 30 --lr 0.001
+
+    Or set in config file (conf/img_class_config.yaml):
+        model:
+          freeze_features: true
 
 
 2.4 RESUMING TRAINING FROM CHECKPOINT
@@ -455,16 +492,16 @@ Solution: Reduce batch size (--batch_size 16 or --batch_size 8)
 
 Issue: Training is too slow
 Solution:
-    - Reduce num_workers in conf/data.yaml
+    - Reduce num_workers in conf/img_class_config.yaml
     - Use smaller model (mobilenet_v2 instead of resnet50)
-    - Reduce image size in conf/data.yaml
+    - Reduce image size in conf/img_class_config.yaml
 
 Issue: Model not improving
 Solution:
     - Check if data is properly split (run 01b_image_train_val_test_split.py)
     - Try different learning rate (--lr 0.0001 or --lr 0.01)
     - Increase patience (--patience 15)
-    - Add more data augmentation in conf/data.yaml
+    - Add more data augmentation in conf/img_class_config.yaml
 
 Issue: Overfitting (train accuracy >> validation accuracy)
 Solution:
@@ -514,6 +551,9 @@ SECTION 6: TIPS AND BEST PRACTICES
 
 14. Each model type's evaluation overwrites previous results - archive important ones
 
+15. Use --freeze_features with pretrained models when you have limited data or want
+    faster training - only the classifier head will be trained
+
 
 ================================================================================
 SECTION 7: CODE ORGANIZATION
@@ -533,13 +573,15 @@ Project Structure:
         └── google_image_scrapper_utils.py  # Image scraping utilities
 
     conf/
-    └── data.yaml                     # Configuration file
+    └── img_class_config.yaml                     # Configuration file
 
     checkpoints/                      # Training outputs
     └── <model>_ep<e>_bs<b>_lr<lr>_<timestamp>/
         ├── best_model.pth
         ├── final_model.pth
         ├── training_history.json
+        ├── training_diagnostics.txt  # Complete training configuration report
+        ├── image_batches/            # Sample augmented training images
         ├── results_best/
         └── results_final/
 

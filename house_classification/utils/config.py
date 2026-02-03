@@ -51,7 +51,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
     Args:
         config_path: Path to the YAML config file. If None, loads from
-            the default location (conf/data.yaml in project root).
+            the default location (conf/img_class_config.yaml in project root).
 
     Returns:
         dict: Configuration dictionary with all settings.
@@ -61,7 +61,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         yaml.YAMLError: If the YAML file is malformed.
     """
     if config_path is None:
-        config_path = get_project_root() / "conf" / "data.yaml"
+        config_path = get_project_root() / "conf" / "img_class_config.yaml"
     else:
         config_path = Path(config_path)
 
@@ -200,6 +200,50 @@ def get_normalization_config(config: Optional[Dict[str, Any]] = None) -> Dict[st
 
     norm_config = config.get("normalization", {})
     return {**defaults, **norm_config}
+
+
+def get_visualization_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Get visualization configuration.
+
+    Args:
+        config: Configuration dictionary. If None, loads from default location.
+
+    Returns:
+        dict: Visualization settings (samples_per_class, etc.)
+    """
+    if config is None:
+        config = load_config()
+
+    defaults = {
+        "samples_per_class": 12,
+    }
+
+    viz_config = config.get("visualization", {})
+    return {**defaults, **viz_config}
+
+
+def get_model_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Get model configuration.
+
+    Args:
+        config: Configuration dictionary. If None, loads from default location.
+
+    Returns:
+        dict: Model settings (default model, dropout_rate, freeze_features, etc.)
+    """
+    if config is None:
+        config = load_config()
+
+    defaults = {
+        "default": "vanilla",
+        "dropout_rate": 0.5,
+        "freeze_features": False,
+    }
+
+    model_config = config.get("model", {})
+    return {**defaults, **model_config}
 
 
 if __name__ == "__main__":

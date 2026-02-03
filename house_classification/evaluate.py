@@ -943,7 +943,7 @@ def main():
         args.plot = prompt_plot_generation()
 
     print("\n" + "=" * 60)
-    print("Configuration loaded from conf/data.yaml")
+    print("Configuration loaded from conf/img_class_config.yaml")
 
     print("\n" + "=" * 60)
     print("FINAL CONFIGURATION")

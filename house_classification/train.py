@@ -40,8 +40,11 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 
 # Local imports
-from utils.config import load_config, get_training_config, get_data_paths
-from utils.data_loaders import get_data_loaders
+from utils.config import (
+    load_config, get_training_config, get_data_paths,
+    get_normalization_config, get_visualization_config, get_model_config
+)
+from utils.data_loaders import get_data_loaders, save_sample_batches, save_training_diagnostics, append_training_runtime
 from model import VanillaCNN, get_pretrained_model, count_parameters
 
 
@@ -184,7 +187,7 @@ def train(
     patience: int = 10,
     checkpoint_dir: str = "checkpoints",
     device: Optional[torch.device] = None
-) -> Dict:
+) -> Tuple[Dict, float]:
     """
     Complete training loop with validation and early stopping.
 
@@ -200,7 +203,9 @@ def train(
         device: Device to train on. Defaults to best available.
 
     Returns:
-        dict: Training history with losses and accuracies per epoch.
+        Tuple of (history, total_time) where:
+            - history: dict with losses and accuracies per epoch
+            - total_time: total training time in seconds
     """
     if device is None:
         device = get_device()
@@ -331,7 +336,7 @@ def train(
     with open(checkpoint_path / "training_history.json", "w") as f:
         json.dump(history, f, indent=2)
 
-    return history
+    return history, total_time
 
 
 def prompt_model_selection() -> str:
@@ -379,11 +384,12 @@ def main():
     # Load config for defaults
     config = load_config()
     train_config = get_training_config()
+    model_config = get_model_config()
     paths = get_data_paths()
 
     parser = argparse.ArgumentParser(
         description="Train CNN for architectural style classification. "
-                    "Default values are loaded from conf/data.yaml."
+                    "Default values are loaded from conf/img_class_config.yaml."
     )
     parser.add_argument(
         "--model", type=str, default=None,
@@ -413,7 +419,12 @@ def main():
     )
     parser.add_argument(
         "--config", type=str, default=None,
-        help="Path to custom config YAML file (default: conf/data.yaml)"
+        help="Path to custom config YAML file (default: conf/img_class_config.yaml)"
+    )
+    parser.add_argument(
+        "--freeze_features", action="store_true",
+        default=model_config["freeze_features"],
+        help=f"Freeze pretrained layers and only train classifier head (default: {model_config['freeze_features']} from config)"
     )
 
     args = parser.parse_args()
@@ -425,8 +436,9 @@ def main():
     print("\n" + "=" * 60)
     print("Architectural Style Classification - Training")
     print("=" * 60)
-    print("\nConfiguration (from conf/data.yaml, overridden by CLI args):")
+    print("\nConfiguration (from conf/img_class_config.yaml, overridden by CLI args):")
     print(f"  Model: {args.model}")
+    print(f"  Freeze features: {args.freeze_features}")
     print(f"  Epochs: {args.epochs}")
     print(f"  Batch size: {args.batch_size}")
     print(f"  Learning rate: {args.lr}")
@@ -446,7 +458,13 @@ def main():
     if args.model == "vanilla":
         model = VanillaCNN(num_classes=num_classes)
     else:
-        model = get_pretrained_model(args.model, num_classes=num_classes)
+        model = get_pretrained_model(
+            args.model,
+            num_classes=num_classes,
+            freeze_features=args.freeze_features
+        )
+        if args.freeze_features:
+            print("  Feature layers frozen - only training classifier head")
 
     params = count_parameters(model)
     print(f"Total parameters: {params['total']:,}")
@@ -463,7 +481,32 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     checkpoint_dir = paths["checkpoints"] / f"{args.model}_ep{args.epochs}_bs{args.batch_size}_lr{args.lr}_{timestamp}"
 
-    history = train(
+    # Generate sample batch visualizations
+    norm_config = get_normalization_config()
+    viz_config = get_visualization_config()
+    save_sample_batches(
+        train_loader=train_loader,
+        class_names=class_names,
+        output_dir=checkpoint_dir,
+        samples_per_class=viz_config.get("samples_per_class", 12),
+        norm_mean=norm_config.get("mean", [0.485, 0.456, 0.406]),
+        norm_std=norm_config.get("std", [0.229, 0.224, 0.225])
+    )
+
+    # Save training diagnostics
+    _, _, test_loader_for_diag, _ = get_data_loaders(batch_size=args.batch_size)
+    save_training_diagnostics(
+        output_dir=checkpoint_dir,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        test_loader=test_loader_for_diag,
+        class_names=class_names,
+        model_name=args.model,
+        model_params=params,
+        config=config
+    )
+
+    history, total_time = train(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -472,6 +515,9 @@ def main():
         patience=args.patience,
         checkpoint_dir=str(checkpoint_dir)
     )
+
+    # Append training runtime to diagnostics file
+    append_training_runtime(checkpoint_dir, total_time)
 
     print(f"\nCheckpoints saved to: {checkpoint_dir}/")
     print("\nTraining complete!")
