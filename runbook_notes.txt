@@ -177,8 +177,8 @@ Progress Bars:
     - Learning rate updates
 
 Output:
-    Checkpoints saved to: checkpoints/<model>_ep<epochs>_bs<batch_size>_lr<lr>_<timestamp>/
-    Example: checkpoints/vanilla_ep50_bs32_lr0.001_20260202_143022/
+    Checkpoints saved to: checkpoints/<model>_ep<epochs>_bs<batch_size>_lr<lr>/
+    Example: checkpoints/vanilla_ep50_bs32_lr0.001/
         - best_model.pth           : Best model based on validation loss
         - final_model.pth          : Final model after all epochs
         - training_history.json    : Loss and accuracy for each epoch
@@ -188,7 +188,7 @@ Output:
             - colonial.png
             - ... (one file per class)
 
-Note: Checkpoint directory names now include hyperparameters for easy tracking.
+Note: Checkpoint directories are overwritten when running with the same hyperparameters.
 Note: Sample batch visualizations show what the augmented training data looks like
       with all transformations applied (rotation, flip, color jitter, etc.).
 Note: training_diagnostics.txt contains complete training configuration including
@@ -257,7 +257,7 @@ If training is interrupted, resume from the last saved checkpoint:
 
     python train.py \
         --model resnet18 \
-        --resume checkpoints/resnet18_ep30_bs32_lr0.001_20260202_143022/best_model.pth \
+        --resume checkpoints/resnet18_ep30_bs32_lr0.001/best_model.pth \
         --epochs 50
 
 
@@ -302,8 +302,8 @@ Note: Model architecture is automatically detected from the checkpoint directory
 Example Interactive Session:
     AVAILABLE MODEL CHECKPOINT DIRECTORIES
     ======================================================================
-    1. vanilla_ep50_bs32_lr0.001_20260202_143022 [best, final]
-    2. resnet18_ep30_bs32_lr0.001_20260201_120000 [best, final]
+    1. vanilla_ep50_bs32_lr0.001 [best, final]
+    2. resnet18_ep30_bs32_lr0.001 [best, final]
     ======================================================================
 
     Select checkpoint directory (1-2): 1
@@ -330,7 +330,7 @@ Example Interactive Session:
 You can specify everything via command-line arguments:
 
     python evaluate.py \
-        --checkpoint checkpoints/vanilla_ep50_bs32_lr0.001_20260202_143022/best_model.pth \
+        --checkpoint checkpoints/vanilla_ep50_bs32_lr0.001/best_model.pth \
         --batch_size 32 \
         --plot
 
@@ -349,7 +349,7 @@ Parameters:
 --------------------------------
 Results are saved in the checkpoint directory with organized subdirectories:
 
-    checkpoints/vanilla_ep50_bs32_lr0.001_20260202_143022/
+    checkpoints/vanilla_ep50_bs32_lr0.001/
     ├── best_model.pth
     ├── final_model.pth
     ├── training_history.json
@@ -575,8 +575,8 @@ Project Structure:
     conf/
     └── img_class_config.yaml                     # Configuration file
 
-    checkpoints/                      # Training outputs
-    └── <model>_ep<e>_bs<b>_lr<lr>_<timestamp>/
+    checkpoints/                      # Training outputs (overwritten per model config)
+    └── <model>_ep<e>_bs<b>_lr<lr>/
         ├── best_model.pth
         ├── final_model.pth
         ├── training_history.json

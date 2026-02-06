@@ -29,7 +29,6 @@ Requirements:
 import argparse
 import json
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -477,9 +476,8 @@ def main():
         model.load_state_dict(checkpoint['model_state_dict'])
         print(f"Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
 
-    # Train - use checkpoint path from config
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    checkpoint_dir = paths["checkpoints"] / f"{args.model}_ep{args.epochs}_bs{args.batch_size}_lr{args.lr}_{timestamp}"
+    # Train - use checkpoint path from config (overwrites previous runs with same hyperparameters)
+    checkpoint_dir = paths["checkpoints"] / f"{args.model}_ep{args.epochs}_bs{args.batch_size}_lr{args.lr}"
 
     # Generate sample batch visualizations
     norm_config = get_normalization_config()
