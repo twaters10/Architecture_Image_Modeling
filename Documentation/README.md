@@ -1,1 +1,0 @@
-# Architecture_Image_Modeling
