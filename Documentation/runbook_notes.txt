@@ -1,0 +1,597 @@
+================================================================================
+ARCHITECTURAL STYLE CLASSIFICATION - COMPLETE RUNBOOK
+================================================================================
+
+This runbook provides step-by-step instructions for preparing data, training
+models, and evaluating performance for the architectural style classification
+project using PyTorch.
+
+================================================================================
+SECTION 1: DATA PREPARATION
+================================================================================
+
+1.1 IMAGE SCRAPING
+------------------
+Script: house_classification/01_image_scrapper.py
+
+Purpose: Downloads images for each architectural style from Google using SerpAPI.
+
+Usage:
+    cd house_classification
+    python 01_image_scrapper.py
+
+Interactive Prompts:
+    - SerpAPI key (required for Google image search)
+    - CSV file path containing house styles (e.g., data/house_styles.csv)
+    - Number of images to scrape per house style (e.g., 100)
+
+Output:
+    - Images saved to: architectural_style_images/<style_name>/
+    - Each style gets its own subdirectory with downloaded images
+
+
+1.2 IMAGE CLEANUP
+-----------------
+Script: house_classification/01a_image_cleanup.py
+
+Purpose:
+    - Removes corrupted images that cannot be opened
+    - Detects and removes near-duplicate images within each style folder
+    - Ensures dataset quality before training
+
+Usage:
+    cd house_classification
+    python 01a_image_cleanup.py
+
+Interactive Prompts:
+    - Duplicate detection threshold (0.0-1.0)
+      Lower values = images must be more similar to be considered duplicates
+      Recommended: 0.9 for strict matching, 0.85 for moderate matching
+
+Output:
+    - Cleaned images remain in: architectural_style_images/<style_name>/
+    - Corrupted and duplicate images are removed
+    - Summary statistics printed to console
+
+
+1.3 TRAIN/VALIDATION/TEST SPLIT
+--------------------------------
+Script: house_classification/01b_image_train_val_test_split.py
+
+Purpose: Splits cleaned images into train, validation, and test sets while
+preserving class structure.
+
+Usage:
+    cd house_classification
+    python 01b_image_train_val_test_split.py
+
+Interactive Prompts:
+    - Random seed (optional, for reproducibility - e.g., 42)
+    - Train split percentage (e.g., 70)
+    - Validation split percentage (e.g., 20)
+    - Test split percentage (e.g., 10)
+    - Confirmation (y/n)
+
+Example Session:
+    Enter random seed (press Enter for random): 42
+    Train split percentage (e.g., 70): 70
+    Validation split percentage (e.g., 20): 20
+    Test split percentage (e.g., 10): 10
+    Proceed with split? (y/n): y
+
+Output Structure:
+    architectural_style_images/
+    ├── train/
+    │   ├── american_craftsman/
+    │   ├── colonial/
+    │   └── ...
+    ├── validation/
+    │   ├── american_craftsman/
+    │   ├── colonial/
+    │   └── ...
+    └── test/
+        ├── american_craftsman/
+        ├── colonial/
+        └── ...
+
+Note: Images are copied (not moved), preserving original dataset.
+
+
+================================================================================
+SECTION 2: MODEL TRAINING
+================================================================================
+
+2.1 CONFIGURATION
+-----------------
+Configuration File: conf/img_class_config.yaml
+Core Modules: house_classification/utils/config.py
+              house_classification/utils/data_loaders.py
+
+Edit conf/img_class_config.yaml to set default parameters for:
+    - Data paths (train/validation/test directories)
+    - Batch size, number of workers, image size
+    - Data augmentation settings
+    - Training hyperparameters (epochs, learning rate, etc.)
+    - Normalization statistics
+    - Model settings (freeze_features, dropout_rate)
+
+All training scripts use these defaults, which can be overridden via CLI.
+
+
+2.2 TRAINING VANILLA CNN (BASELINE)
+------------------------------------
+Script: house_classification/train.py
+
+Purpose: Train a vanilla CNN from scratch to establish baseline performance.
+
+Interactive Mode (Recommended for beginners):
+    cd house_classification
+    python train.py
+
+    The script will prompt you to:
+    1. Select model architecture (Vanilla CNN, ResNet-18, etc.)
+    2. Optionally adjust other parameters via CLI flags
+
+Example Interactive Session:
+    SELECT MODEL ARCHITECTURE
+    ======================================================================
+    1. Vanilla CNN - Simple baseline model built from scratch
+    2. ResNet-18 - Pretrained, good balance of speed and accuracy
+    3. ResNet-34 - Pretrained, more parameters than ResNet-18
+    4. ResNet-50 - Pretrained, largest ResNet for best accuracy
+    5. EfficientNet-B0 - Pretrained, efficient architecture
+    6. MobileNet-V2 - Pretrained, lightweight for deployment
+    ======================================================================
+
+    Select model (1-6): 1
+
+Command-Line Mode (For automation/scripts):
+    python train.py --model vanilla --epochs 50 --batch_size 32 --lr 0.001
+
+Full Options:
+    python train.py \
+        --model vanilla \
+        --epochs 50 \
+        --batch_size 32 \
+        --lr 0.001 \
+        --patience 10
+
+Parameters Explained:
+    --model           : Model architecture (vanilla, resnet18, resnet34, resnet50,
+                        efficientnet_b0, mobilenet_v2) - will prompt if not specified
+    --epochs          : Maximum number of training epochs (default: 50)
+    --batch_size      : Number of images per batch (default: 32)
+    --lr              : Learning rate (default: 0.001)
+    --patience        : Early stopping patience - stops if no improvement for N
+                        epochs (default: 10)
+    --freeze_features : Freeze pretrained layers and only train the classifier head
+                        (default: false from config). Only applies to pretrained models.
+    --resume          : Path to checkpoint to resume training
+    --config          : Path to custom config YAML file
+
+Progress Bars:
+    Training now includes tqdm progress bars showing:
+    - Overall training progress across epochs
+    - Batch-level progress within each epoch
+    - Real-time loss and accuracy metrics
+    - Learning rate updates
+
+Output:
+    Checkpoints saved to: checkpoints/<model>_ep<epochs>_bs<batch_size>_lr<lr>/
+    Example: checkpoints/vanilla_ep50_bs32_lr0.001/
+        - best_model.pth           : Best model based on validation loss
+        - final_model.pth          : Final model after all epochs
+        - training_history.json    : Loss and accuracy for each epoch
+        - training_diagnostics.txt : Comprehensive training setup report
+        - image_batches/           : Sample augmented training images per class
+            - american_craftsman.png
+            - colonial.png
+            - ... (one file per class)
+
+Note: Checkpoint directories are overwritten when running with the same hyperparameters.
+Note: Sample batch visualizations show what the augmented training data looks like
+      with all transformations applied (rotation, flip, color jitter, etc.).
+Note: training_diagnostics.txt contains complete training configuration including
+      dataset statistics, per-class sample counts, augmentation settings, and
+      hyperparameters for reproducibility and analysis.
+
+
+2.3 TRAINING WITH TRANSFER LEARNING (PRETRAINED MODELS)
+--------------------------------------------------------
+Purpose: Use pretrained models (trained on ImageNet) for better performance.
+
+Interactive Mode (Easy selection):
+    python train.py --epochs 30 --lr 0.001
+    [Select ResNet-18, ResNet-34, ResNet-50, EfficientNet-B0, or MobileNet-V2 from menu]
+
+Command-Line Mode (Direct specification):
+    ResNet18 (Recommended for speed/performance balance):
+        python train.py --model resnet18 --epochs 30 --lr 0.001
+
+    ResNet34 (More parameters, potentially better accuracy):
+        python train.py --model resnet34 --epochs 30 --lr 0.001
+
+    ResNet50 (Largest ResNet, best for accuracy):
+        python train.py --model resnet50 --epochs 30 --lr 0.0005
+
+    EfficientNet-B0 (Efficient architecture):
+        python train.py --model efficientnet_b0 --epochs 30 --lr 0.001
+
+    MobileNet-V2 (Lightweight, good for deployment):
+        python train.py --model mobilenet_v2 --epochs 30 --lr 0.001
+
+Tips for Transfer Learning:
+    - Use lower learning rates (0.001 or 0.0005) to avoid disrupting
+      pretrained weights
+    - May need fewer epochs (~30) since starting from pretrained weights
+    - Batch size of 32 is a good default; increase if you have more GPU memory
+
+Freeze Features Option (--freeze_features):
+    When enabled, freezes all pretrained layers and only trains the classifier head.
+
+    Use freeze_features when:
+        - You have a small dataset (prevents overfitting)
+        - You want faster training (fewer parameters to update)
+        - Your images are similar to ImageNet (pretrained features work well)
+
+    Don't use freeze_features when:
+        - You have a large dataset
+        - Your images differ significantly from ImageNet
+        - You want maximum accuracy (fine-tuning all layers)
+
+    Example:
+        # Freeze features - only train classifier (faster, fewer params)
+        python train.py --model resnet18 --freeze_features --epochs 20 --lr 0.01
+
+        # Fine-tune all layers (default behavior)
+        python train.py --model resnet18 --epochs 30 --lr 0.001
+
+    Or set in config file (conf/img_class_config.yaml):
+        model:
+          freeze_features: true
+
+
+2.4 RESUMING TRAINING FROM CHECKPOINT
+--------------------------------------
+If training is interrupted, resume from the last saved checkpoint:
+
+    python train.py \
+        --model resnet18 \
+        --resume checkpoints/resnet18_ep30_bs32_lr0.001/best_model.pth \
+        --epochs 50
+
+
+2.5 MONITORING TRAINING
+------------------------
+During training, the script displays:
+    - Epoch-level progress bar with overall training status
+    - Batch-level progress bars showing current loss/accuracy
+    - Detailed epoch summary (train/val loss and accuracy)
+    - Time per epoch
+    - Early stopping status
+    - Model saving notifications
+
+Training automatically:
+    - Reduces learning rate when validation loss plateaus
+    - Saves the best model based on validation loss
+    - Stops early if no improvement for 'patience' epochs
+
+
+================================================================================
+SECTION 3: MODEL EVALUATION
+================================================================================
+
+3.1 INTERACTIVE EVALUATION (RECOMMENDED)
+-----------------------------------------
+Script: house_classification/evaluate.py
+
+Purpose: Evaluate a trained model on the test set with interactive prompts
+for checkpoint selection and visualization options.
+
+Simple Usage (Interactive Mode):
+    cd house_classification
+    python evaluate.py
+
+The script will guide you through:
+    1. Select checkpoint directory (sorted by most recent)
+    2. Choose best or final model
+    3. Choose whether to generate plots
+
+Note: Model architecture is automatically detected from the checkpoint directory name.
+
+Example Interactive Session:
+    AVAILABLE MODEL CHECKPOINT DIRECTORIES
+    ======================================================================
+    1. vanilla_ep50_bs32_lr0.001 [best, final]
+    2. resnet18_ep30_bs32_lr0.001 [best, final]
+    ======================================================================
+
+    Select checkpoint directory (1-2): 1
+
+    SELECT MODEL CHECKPOINT
+    ======================================================================
+    1. best_model.pth - Best model (lowest validation loss)
+    2. final_model.pth - Final model (last epoch)
+    ======================================================================
+
+    Select checkpoint (1-2): 1
+
+    Detected model type from checkpoint path: vanilla
+
+    GENERATE VISUALIZATION PLOTS?
+    ======================================================================
+    1. Yes - Generate confusion matrix and training history plots
+    2. No - Skip plot generation
+    ======================================================================
+
+
+3.2 COMMAND-LINE EVALUATION (NON-INTERACTIVE)
+----------------------------------------------
+You can specify everything via command-line arguments:
+
+    python evaluate.py \
+        --checkpoint checkpoints/vanilla_ep50_bs32_lr0.001/best_model.pth \
+        --batch_size 32 \
+        --plot
+
+Note: The --model argument is optional and will be auto-detected from the checkpoint
+directory name. Only specify it if you need to override the auto-detection.
+
+Parameters:
+    --checkpoint  : Path to the trained model checkpoint (required if not using interactive mode)
+    --model       : Model architecture (optional - auto-detected from checkpoint path)
+    --batch_size  : Batch size for evaluation (default: 32)
+    --plot        : Generate and save visualization plots
+    --output_dir  : Custom directory to save results (optional)
+
+
+3.3 EVALUATION OUTPUT STRUCTURE
+--------------------------------
+Results are saved in the checkpoint directory with organized subdirectories:
+
+    checkpoints/vanilla_ep50_bs32_lr0.001/
+    ├── best_model.pth
+    ├── final_model.pth
+    ├── training_history.json
+    ├── results_best/                           # Best model evaluation
+    │   ├── evaluation_results.json             # Metrics in JSON
+    │   ├── evaluation_summary.txt              # Comprehensive text report
+    │   ├── comprehensive_analysis.png          # Multi-panel visualization
+    │   ├── confusion_matrix.png                # Normalized confusion matrix
+    │   ├── per_class_metrics.png               # Precision/Recall/F1 bars
+    │   ├── class_accuracy.png                  # Per-class accuracy heatmap
+    │   └── training_history.png                # Training curves
+    └── results_final/                          # Final model evaluation
+        └── [same files as results_best/]
+
+Note: Each evaluation overwrites previous results for that model type (best/final).
+
+
+3.4 EVALUATION OUTPUTS EXPLAINED
+---------------------------------
+
+Console Output:
+    - Overall test accuracy and loss
+    - Per-class precision, recall, F1-score, and support
+    - Confusion matrix (text format)
+
+evaluation_summary.txt:
+    - Complete text report with:
+        * Evaluation metadata (checkpoint, timestamp, classes)
+        * Overall performance metrics
+        * Per-class detailed metrics table
+        * Full confusion matrix
+        * Top 10 misclassification pairs with percentages
+
+comprehensive_analysis.png (Multi-Panel Visualization):
+    - Normalized confusion matrix (with percentages)
+    - Per-class metrics (horizontal bars)
+    - Test set distribution (sample counts)
+    - Per-class accuracy (color-coded bar chart)
+    - Top misclassifications (most common errors)
+    - Overall metrics summary panel
+
+Individual Plots:
+    - confusion_matrix.png: Detailed heatmap
+    - per_class_metrics.png: Precision/Recall/F1 comparison
+    - class_accuracy.png: Accuracy by class
+    - training_history.png: Loss and accuracy curves over epochs
+
+
+3.5 INTERPRETING RESULTS
+-------------------------
+Classification Report:
+    - Precision: Of all predictions for a class, what % were correct?
+    - Recall: Of all actual instances of a class, what % were found?
+    - F1-Score: Harmonic mean of precision and recall (balanced metric)
+    - Support: Number of true samples in each class
+
+Confusion Matrix:
+    - Rows = True labels
+    - Columns = Predicted labels
+    - Diagonal = Correct predictions
+    - Off-diagonal = Misclassifications (look for patterns)
+
+Top Misclassifications:
+    - Shows which classes are most commonly confused
+    - Helps identify areas for improvement (more data, better features)
+
+
+================================================================================
+SECTION 4: COMPARING MODELS
+================================================================================
+
+4.1 RECOMMENDED WORKFLOW
+------------------------
+Option A: Interactive Mode (Recommended for beginners)
+1. Train vanilla baseline:
+    python train.py --epochs 50 --batch_size 32 --lr 0.001
+    [Select option 1: Vanilla CNN]
+
+2. Train multiple transfer learning models:
+    python train.py --epochs 30 --batch_size 32 --lr 0.001
+    [Select option 2: ResNet-18]
+
+    python train.py --epochs 30 --batch_size 32 --lr 0.001
+    [Select option 3: ResNet-34]
+
+    python train.py --epochs 30 --batch_size 32 --lr 0.001
+    [Select option 5: EfficientNet-B0]
+
+3. Evaluate each model (model type auto-detected from checkpoint path):
+    python evaluate.py
+    [Select vanilla model -> best -> generate plots]
+
+    python evaluate.py
+    [Select resnet18 model -> best -> generate plots]
+
+    python evaluate.py
+    [Select resnet34 model -> best -> generate plots]
+
+Option B: Command-Line Mode (For automation/scripts)
+1. Train vanilla baseline:
+    python train.py --model vanilla --epochs 50 --batch_size 32 --lr 0.001
+
+2. Train multiple transfer learning models:
+    python train.py --model resnet18 --epochs 30 --batch_size 32 --lr 0.001
+    python train.py --model resnet34 --epochs 30 --batch_size 32 --lr 0.001
+    python train.py --model efficientnet_b0 --epochs 30 --batch_size 32 --lr 0.001
+
+3. Evaluate each model (model type auto-detected, can mix interactive and CLI):
+    python evaluate.py  # Interactive mode
+    python evaluate.py --checkpoint checkpoints/<path> --plot  # CLI mode (no --model needed)
+
+4. Compare results:
+    - Review each model's comprehensive_analysis.png for visual comparison
+    - Check evaluation_summary.txt for detailed metrics
+    - Look at overall test accuracy
+    - Check per-class F1 scores for classes of interest
+    - Examine confusion matrices for error patterns
+    - Consider model size vs accuracy tradeoff
+
+
+4.2 QUICK COMPARISON COMMANDS
+------------------------------
+# Count parameters for each model (requires model.py)
+cd house_classification
+python -c "from model import VanillaCNN, get_pretrained_model, count_parameters; \
+           print('Vanilla:', count_parameters(VanillaCNN(10))); \
+           print('ResNet18:', count_parameters(get_pretrained_model('resnet18', 10))); \
+           print('ResNet50:', count_parameters(get_pretrained_model('resnet50', 10)))"
+
+
+================================================================================
+SECTION 5: TROUBLESHOOTING
+================================================================================
+
+Issue: PIL UserWarning about palette images with transparency
+Solution: Fixed - data_loaders.py now properly converts all images to RGB
+
+Issue: Out of Memory (OOM) during training
+Solution: Reduce batch size (--batch_size 16 or --batch_size 8)
+
+Issue: Training is too slow
+Solution:
+    - Reduce num_workers in conf/img_class_config.yaml
+    - Use smaller model (mobilenet_v2 instead of resnet50)
+    - Reduce image size in conf/img_class_config.yaml
+
+Issue: Model not improving
+Solution:
+    - Check if data is properly split (run 01b_image_train_val_test_split.py)
+    - Try different learning rate (--lr 0.0001 or --lr 0.01)
+    - Increase patience (--patience 15)
+    - Add more data augmentation in conf/img_class_config.yaml
+
+Issue: Overfitting (train accuracy >> validation accuracy)
+Solution:
+    - Reduce model complexity
+    - Increase data augmentation
+    - Add dropout or regularization
+    - Collect more training data
+
+Issue: Cannot find config or data_loaders module
+Solution: These modules are now in house_classification/utils/
+    - Make sure you're running scripts from the correct directory
+    - Imports should be: from utils.config import ...
+
+
+================================================================================
+SECTION 6: TIPS AND BEST PRACTICES
+================================================================================
+
+1. Always use a random seed for reproducibility (especially for data splits)
+
+2. Start with vanilla CNN to establish baseline, then move to transfer learning
+
+3. Use interactive mode for training and evaluation (just run python train.py or
+   python evaluate.py without arguments) - great for beginners and exploration
+
+4. Model architecture is automatically detected during evaluation from the checkpoint
+   directory name - no need to specify --model unless overriding
+
+5. For automation or scripts, use command-line arguments to specify all options
+
+6. Monitor validation accuracy during training - watch the tqdm progress bars
+
+7. Always generate plots when evaluating (--plot or select 'y' in prompt) to
+   visualize results comprehensively
+
+8. Review the evaluation_summary.txt file for detailed textual analysis
+
+9. Compare comprehensive_analysis.png across models for quick visual comparison
+
+10. Checkpoint directories now include hyperparameters - easy to track experiments
+
+11. For production, use MobileNet-V2 or EfficientNet-B0 for faster inference
+
+12. Check class balance in your dataset - consider weighted loss if imbalanced
+
+13. Evaluation results are organized in results_best/ and results_final/ folders
+
+14. Each model type's evaluation overwrites previous results - archive important ones
+
+15. Use --freeze_features with pretrained models when you have limited data or want
+    faster training - only the classifier head will be trained
+
+
+================================================================================
+SECTION 7: CODE ORGANIZATION
+================================================================================
+
+Project Structure:
+    house_classification/
+    ├── 01_image_scrapper.py          # Data collection
+    ├── 01a_image_cleanup.py          # Data cleaning
+    ├── 01b_image_train_val_test_split.py  # Data splitting
+    ├── model.py                      # Model architectures
+    ├── train.py                      # Training script
+    ├── evaluate.py                   # Evaluation script (interactive)
+    └── utils/
+        ├── config.py                 # Configuration management
+        ├── data_loaders.py           # PyTorch data loaders
+        └── google_image_scrapper_utils.py  # Image scraping utilities
+
+    conf/
+    └── img_class_config.yaml                     # Configuration file
+
+    checkpoints/                      # Training outputs (overwritten per model config)
+    └── <model>_ep<e>_bs<b>_lr<lr>/
+        ├── best_model.pth
+        ├── final_model.pth
+        ├── training_history.json
+        ├── training_diagnostics.txt  # Complete training configuration report
+        ├── image_batches/            # Sample augmented training images
+        ├── results_best/
+        └── results_final/
+
+
+Key Features:
+    - Interactive training mode with model architecture selection prompts
+    - Interactive evaluation with smart checkpoint selection and automatic model detection
+    - Progress bars with tqdm for training visibility
+    - Comprehensive visualizations and text reports
+    - Organized results structure with model type subdirectories
+    - Hyperparameter tracking in checkpoint directory names
+    - Modular code organization with utils package
+    - Full command-line interface for automation and scripting
