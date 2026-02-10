@@ -170,7 +170,7 @@ def get_data_loaders(
     """
     Create PyTorch DataLoaders for train, validation, and test sets.
 
-    Loads settings from conf/img_class_config.yaml by default. Parameters passed to this
+    Loads settings from conf/training_config.yaml by default. Parameters passed to this
     function override the config file values.
 
     Expects directory structure created by 01b_image_train_val_test_split.py:
@@ -186,7 +186,7 @@ def get_data_loaders(
 
     Args:
         data_dir: Root directory containing train/validation/test subdirectories.
-            Defaults to path from conf/img_class_config.yaml.
+            Defaults to path from conf/training_config.yaml.
         batch_size: Number of images per batch. Defaults to config value.
         image_size: Target image size for CNN input. Defaults to config value.
         num_workers: Number of worker processes for data loading. Defaults to config value.
@@ -290,7 +290,7 @@ def get_dataset_info(data_dir: Optional[Union[str, Path]] = None) -> dict:
 
     Args:
         data_dir: Root directory containing train/validation/test subdirectories.
-            Defaults to path from conf/img_class_config.yaml.
+            Defaults to path from conf/training_config.yaml.
 
     Returns:
         dict: Dataset statistics including class counts and sample distribution.
@@ -658,7 +658,7 @@ if __name__ == "__main__":
         loader_config = get_data_loader_config()
         paths = get_data_paths()
 
-        print("\nConfiguration loaded from conf/img_class_config.yaml:")
+        print("\nConfiguration loaded from conf/training_config.yaml:")
         print(f"  Batch size: {loader_config['batch_size']}")
         print(f"  Image size: {loader_config['image_size']}")
         print(f"  Num workers: {loader_config['num_workers']}")

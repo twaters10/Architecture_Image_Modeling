@@ -388,7 +388,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         description="Train CNN for architectural style classification. "
-                    "Default values are loaded from conf/img_class_config.yaml."
+                    "Default values are loaded from conf/training_config.yaml."
     )
     parser.add_argument(
         "--model", type=str, default=None,
@@ -418,7 +418,7 @@ def main():
     )
     parser.add_argument(
         "--config", type=str, default=None,
-        help="Path to custom config YAML file (default: conf/img_class_config.yaml)"
+        help="Path to custom config YAML file (default: conf/training_config.yaml)"
     )
     parser.add_argument(
         "--freeze_features", action="store_true",
@@ -435,7 +435,7 @@ def main():
     print("\n" + "=" * 60)
     print("Architectural Style Classification - Training")
     print("=" * 60)
-    print("\nConfiguration (from conf/img_class_config.yaml, overridden by CLI args):")
+    print("\nConfiguration (from conf/training_config.yaml, overridden by CLI args):")
     print(f"  Model: {args.model}")
     print(f"  Freeze features: {args.freeze_features}")
     print(f"  Epochs: {args.epochs}")

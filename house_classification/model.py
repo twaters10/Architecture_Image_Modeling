@@ -120,7 +120,8 @@ def get_pretrained_model(
     model_name: str,
     num_classes: int,
     pretrained: bool = True,
-    freeze_features: bool = False
+    freeze_features: bool = False,
+    dropout_rate: Optional[float] = None
 ) -> nn.Module:
     """
     Get a pretrained model for transfer learning.
@@ -138,6 +139,8 @@ def get_pretrained_model(
         pretrained: Whether to load pretrained ImageNet weights. Defaults to True.
         freeze_features: Whether to freeze the feature extractor layers.
             If True, only the classifier will be trained. Defaults to False.
+        dropout_rate: Dropout probability for the classifier head. If None,
+            uses the model's default (no dropout for ResNet, built-in for others).
 
     Returns:
         nn.Module: The model with modified classifier for the target task.
@@ -147,37 +150,45 @@ def get_pretrained_model(
     """
     weights = "IMAGENET1K_V1" if pretrained else None
 
-    if model_name == "resnet18":
-        model = models.resnet18(weights=weights)
-        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    if model_name in ("resnet18", "resnet34", "resnet50"):
+        model = getattr(models, model_name)(weights=weights)
+        in_features = model.fc.in_features
+        if dropout_rate is not None:
+            model.fc = nn.Sequential(
+                nn.Dropout(dropout_rate),
+                nn.Linear(in_features, num_classes)
+            )
+        else:
+            model.fc = nn.Linear(in_features, num_classes)
 
-    elif model_name == "resnet34":
-        model = models.resnet34(weights=weights)
-        model.fc = nn.Linear(model.fc.in_features, num_classes)
-
-    elif model_name == "resnet50":
-        model = models.resnet50(weights=weights)
-        model.fc = nn.Linear(model.fc.in_features, num_classes)
-
-    elif model_name == "vgg16":
-        model = models.vgg16(weights=weights)
+    elif model_name in ("vgg16", "vgg19"):
+        model = getattr(models, model_name)(weights=weights)
         model.classifier[-1] = nn.Linear(4096, num_classes)
+        if dropout_rate is not None:
+            model.classifier[2] = nn.Dropout(dropout_rate)
+            model.classifier[5] = nn.Dropout(dropout_rate)
 
-    elif model_name == "vgg19":
-        model = models.vgg19(weights=weights)
-        model.classifier[-1] = nn.Linear(4096, num_classes)
-
-    elif model_name == "efficientnet_b0":
-        model = models.efficientnet_b0(weights=weights)
-        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
-
-    elif model_name == "efficientnet_b1":
-        model = models.efficientnet_b1(weights=weights)
-        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
+    elif model_name in ("efficientnet_b0", "efficientnet_b1"):
+        model = getattr(models, model_name)(weights=weights)
+        in_features = model.classifier[-1].in_features
+        if dropout_rate is not None:
+            model.classifier = nn.Sequential(
+                nn.Dropout(dropout_rate),
+                nn.Linear(in_features, num_classes)
+            )
+        else:
+            model.classifier[-1] = nn.Linear(in_features, num_classes)
 
     elif model_name == "mobilenet_v2":
         model = models.mobilenet_v2(weights=weights)
-        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
+        in_features = model.classifier[-1].in_features
+        if dropout_rate is not None:
+            model.classifier = nn.Sequential(
+                nn.Dropout(dropout_rate),
+                nn.Linear(in_features, num_classes)
+            )
+        else:
+            model.classifier[-1] = nn.Linear(in_features, num_classes)
 
     else:
         raise ValueError(

@@ -51,7 +51,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
     Args:
         config_path: Path to the YAML config file. If None, loads from
-            the default location (conf/img_class_config.yaml in project root).
+            the default location (conf/training_config.yaml in project root).
 
     Returns:
         dict: Configuration dictionary with all settings.
@@ -61,7 +61,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         yaml.YAMLError: If the YAML file is malformed.
     """
     if config_path is None:
-        config_path = get_project_root() / "conf" / "img_class_config.yaml"
+        config_path = get_project_root() / "conf" / "training_config.yaml"
     else:
         config_path = Path(config_path)
 
@@ -244,6 +244,81 @@ def get_model_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
     model_config = config.get("model", {})
     return {**defaults, **model_config}
+
+
+def load_tuning_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Load tuning configuration from YAML file.
+
+    Args:
+        config_path: Path to the tuning YAML config file. If None, loads from
+            the default location (conf/tuning_config.yaml in project root).
+
+    Returns:
+        dict: Tuning configuration with all settings and defaults applied.
+
+    Raises:
+        FileNotFoundError: If the config file doesn't exist.
+        yaml.YAMLError: If the YAML file is malformed.
+    """
+    if config_path is None:
+        config_path = get_project_root() / "conf" / "tuning_config.yaml"
+    else:
+        config_path = Path(config_path)
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"Tuning config file not found: {config_path}")
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    # Apply defaults for tuning section
+    tuning_defaults = {
+        "search_method": "grid_search",
+        "model": "resnet18",
+        "epochs_per_trial": 15,
+        "patience": 7,
+        "weight_decay": 0.0001,
+        "freeze_features": False,
+        "output_dir": "checkpoints_tuning",
+        "no_plots": False,
+    }
+    config["tuning"] = {**tuning_defaults, **config.get("tuning", {})}
+
+    # Apply defaults for search space
+    search_defaults = {
+        "learning_rate": {
+            "values": [0.0001, 0.001, 0.01],
+            "min": 0.0001, "max": 0.01, "log_scale": True,
+        },
+        "dropout_rate": {
+            "values": [0.3, 0.5, 0.7],
+            "min": 0.1, "max": 0.8, "log_scale": False,
+        },
+        "batch_size": {
+            "values": [16, 32, 64],
+            "choices": [8, 16, 32, 64, 128],
+        },
+    }
+    search_space = config.get("search_space", {})
+    for param, defaults in search_defaults.items():
+        search_space[param] = {**defaults, **search_space.get(param, {})}
+    config["search_space"] = search_space
+
+    # Apply defaults for bayesian settings
+    bayesian_defaults = {"n_trials": 20, "n_initial": 5}
+    config["bayesian"] = {**bayesian_defaults, **config.get("bayesian", {})}
+
+    # Apply defaults for genetic settings
+    genetic_defaults = {
+        "population_size": 10,
+        "n_generations": 5,
+        "mutation_rate": 0.2,
+        "crossover_rate": 0.8,
+    }
+    config["genetic"] = {**genetic_defaults, **config.get("genetic", {})}
+
+    return config
 
 
 if __name__ == "__main__":
