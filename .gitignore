@@ -7,10 +7,12 @@ __pycache__/
 /models/yolo/
 /conf/apikeys.yaml
 ~*
-Documentation/Residential_Architectural_Styles_Illustrated.docx
-Documentation/project_plan.docx
+Documentation/
 checkpoints/
 checkpoints_tuning/
 conf/
 data/
 notebooks/
+/mlruns
+mlflow.db
+claude.md

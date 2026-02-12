@@ -40,9 +40,10 @@ import numpy as np
 import torch
 
 # Local imports
-from utils.config import load_tuning_config, get_data_paths
+from utils.config import load_tuning_config, get_data_paths, load_config, get_mlflow_config
 from utils.data_loaders import get_data_loaders
 from model import VanillaCNN, get_pretrained_model, count_parameters
+from utils.mlflow_training import log_hyperparameter_tuning
 from train import train, get_device, prompt_model_selection
 
 
@@ -1195,6 +1196,39 @@ def write_diagnostics_summary(results: Dict[str, Any], output_dir: str) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def prompt_mlflow_tracking() -> bool:
+    """
+    Prompt user whether to enable MLflow tracking.
+
+    Returns:
+        bool: True if MLflow should be enabled, False otherwise.
+    """
+    print("\n" + "=" * 70)
+    print("MLFLOW EXPERIMENT TRACKING")
+    print("=" * 70)
+    print("MLflow tracks all tuning trials, metrics, and configurations.")
+    print("You can view results later with: mlflow ui")
+    print("=" * 70)
+    print("1. Yes - Enable MLflow tracking (recommended)")
+    print("2. No - Skip MLflow tracking")
+    print("=" * 70)
+
+    while True:
+        try:
+            choice = input("\nEnable MLflow tracking? (1-2): ").strip()
+            if choice == "1":
+                print("✓ MLflow tracking enabled")
+                return True
+            elif choice == "2":
+                print("✗ MLflow tracking disabled")
+                return False
+            else:
+                print("Please enter 1 or 2.")
+        except (ValueError, KeyboardInterrupt):
+            print("\nDefaulting to no MLflow tracking")
+            return False
+
+
 def main():
     """Main entry point for hyperparameter tuning."""
     parser = argparse.ArgumentParser(
@@ -1213,6 +1247,22 @@ def main():
         "--no_plots", action="store_true",
         help="Skip visualization generation"
     )
+    parser.add_argument(
+        "--mlflow", action="store_true",
+        help="Enable MLflow experiment tracking"
+    )
+    parser.add_argument(
+        "--no_mlflow", action="store_true",
+        help="Disable MLflow experiment tracking"
+    )
+    parser.add_argument(
+        "--mlflow_tracking_uri", type=str, default=None,
+        help="MLflow tracking server URI (default: from config or local ./mlruns)"
+    )
+    parser.add_argument(
+        "--mlflow_experiment", type=str, default=None,
+        help="MLflow experiment name (default: from config)"
+    )
 
     args = parser.parse_args()
 
@@ -1222,6 +1272,29 @@ def main():
     search_space = config["search_space"]
     bayesian_cfg = config["bayesian"]
     genetic_cfg = config["genetic"]
+
+    # Load MLflow configuration from training config
+    training_config = load_config()
+    mlflow_config = get_mlflow_config(training_config)
+
+    # Determine if MLflow should be enabled (priority: CLI > interactive > config)
+    mlflow_enabled = False
+    if args.no_mlflow:
+        # Explicitly disabled via CLI
+        mlflow_enabled = False
+    elif args.mlflow:
+        # Explicitly enabled via CLI
+        mlflow_enabled = True
+    elif mlflow_config.get("enabled", True):
+        # Config says enabled, prompt user
+        mlflow_enabled = prompt_mlflow_tracking()
+    else:
+        # Config says disabled
+        mlflow_enabled = False
+
+    # Use config defaults if not provided via CLI
+    mlflow_tracking_uri = args.mlflow_tracking_uri or mlflow_config.get("tracking_uri")
+    mlflow_experiment = args.mlflow_experiment or mlflow_config.get("experiment_name", "architectural-style-tuning")
 
     # Interactive model selection
     model_name = prompt_model_selection()
@@ -1258,6 +1331,7 @@ def main():
     print(f"Weight decay: {tuning['weight_decay']}")
     print(f"Device: {device}")
     print(f"Classes ({num_classes}): {class_names}")
+    print(f"MLflow tracking: {'enabled' if mlflow_enabled else 'disabled'}")
 
     if search_method == "grid_search":
         print(f"\nGrid Search Space:")
@@ -1371,6 +1445,23 @@ def main():
         print(f"  Val loss: {best['best_val_loss']:.4f}")
 
     print(f"\nResults saved to: {output_dir}/")
+
+    # Log to MLflow if enabled
+    if mlflow_enabled:
+        print("\n" + "=" * 60)
+        print("Logging to MLflow...")
+        print("=" * 60)
+
+        log_hyperparameter_tuning(
+            model_name=model_name,
+            search_method=search_method,
+            search_space=search_space,
+            results=results.get("trials", []),
+            best_config=best["hyperparameters"] if best else {},
+            output_dir=Path(output_dir),
+            tracking_uri=mlflow_tracking_uri,
+            experiment_name=mlflow_experiment
+        )
 
 
 if __name__ == "__main__":

@@ -103,11 +103,11 @@ SECTION 2: MODEL TRAINING
 
 2.1 CONFIGURATION
 -----------------
-Configuration File: conf/img_class_config.yaml
+Configuration File: conf/training_config.yaml
 Core Modules: house_classification/utils/config.py
               house_classification/utils/data_loaders.py
 
-Edit conf/img_class_config.yaml to set default parameters for:
+Edit conf/training_config.yaml to set default parameters for:
     - Data paths (train/validation/test directories)
     - Batch size, number of workers, image size
     - Data augmentation settings
@@ -192,8 +192,9 @@ Note: Checkpoint directories are overwritten when running with the same hyperpar
 Note: Sample batch visualizations show what the augmented training data looks like
       with all transformations applied (rotation, flip, color jitter, etc.).
 Note: training_diagnostics.txt contains complete training configuration including
-      dataset statistics, per-class sample counts, augmentation settings, and
-      hyperparameters for reproducibility and analysis.
+      dataset statistics, per-class sample counts, augmentation settings,
+      hyperparameters for reproducibility, and training runtime (seconds, minutes,
+      hours) appended after training completes.
 
 
 2.3 TRAINING WITH TRANSFER LEARNING (PRETRAINED MODELS)
@@ -246,7 +247,7 @@ Freeze Features Option (--freeze_features):
         # Fine-tune all layers (default behavior)
         python train.py --model resnet18 --epochs 30 --lr 0.001
 
-    Or set in config file (conf/img_class_config.yaml):
+    Or set in config file (conf/training_config.yaml):
         model:
           freeze_features: true
 
@@ -275,6 +276,106 @@ Training automatically:
     - Reduces learning rate when validation loss plateaus
     - Saves the best model based on validation loss
     - Stops early if no improvement for 'patience' epochs
+
+
+2.6 HYPERPARAMETER TUNING
+--------------------------
+Script: house_classification/tune_hyperparameters.py
+Configuration: conf/tuning_config.yaml
+
+Purpose: Systematically search for optimal learning rate, dropout rate, and
+batch size using one of three search methods.
+
+Search Methods:
+    - grid_search : Exhaustive search over all value combinations
+    - bayesian    : Gaussian Process surrogate with Expected Improvement acquisition
+    - genetic     : Evolutionary optimization with tournament selection, crossover,
+                    mutation, and elitism
+
+Usage:
+    cd house_classification
+    python tune_hyperparameters.py
+
+    The script will:
+    1. Load search method and parameters from conf/tuning_config.yaml
+    2. Prompt you to select a model architecture (interactive menu)
+    3. Run the configured search method
+    4. Save results, diagnostics, and visualizations
+
+CLI Options:
+    --config    Path to tuning config YAML (default: conf/tuning_config.yaml)
+    --quick     Use reduced grid for grid_search: lr=[0.001,0.01], do=[0.3,0.5], bs=[16,32]
+    --no_plots  Skip visualization generation
+
+Configuration (conf/tuning_config.yaml):
+    tuning:
+      search_method: "grid_search"    # grid_search, bayesian, or genetic
+      epochs_per_trial: 15
+      patience: 7
+      weight_decay: 0.0001
+      freeze_features: false
+      output_dir: "checkpoints_tuning"
+
+    search_space:
+      learning_rate:
+        values: [0.0001, 0.001, 0.01]    # Used by grid_search
+        min: 0.0001                        # Used by bayesian and genetic
+        max: 0.01
+        log_scale: true
+      dropout_rate:
+        values: [0.3, 0.5, 0.7]
+        min: 0.1
+        max: 0.8
+      batch_size:
+        values: [16, 32, 64]
+        choices: [8, 16, 32, 64, 128]     # Discrete options for bayesian/genetic
+
+    bayesian:
+      n_trials: 20                         # Total trials
+      n_initial: 5                         # Random exploration before GP kicks in
+
+    genetic:
+      population_size: 10
+      n_generations: 5
+      mutation_rate: 0.2
+      crossover_rate: 0.8
+
+Output Directory Structure:
+    checkpoints_tuning/
+    └── <model_name>/
+        └── <search_method>/
+            ├── trials/
+            │   ├── trial_001/
+            │   ├── trial_002/
+            │   └── ...
+            ├── tuning_results.json            # Full results with all trial data
+            ├── diagnostics_summary.txt        # Summary with runtime, best config, top-5
+            ├── heatmap_lr_vs_dropout.png       # LR vs Dropout accuracy heatmap
+            ├── heatmap_lr_vs_batchsize.png     # LR vs Batch Size accuracy heatmap
+            ├── heatmap_dropout_vs_batchsize.png # Dropout vs Batch Size accuracy heatmap
+            ├── top_configurations.png          # Top-10 configs bar chart
+            ├── best_training_curves.png        # Training curves for best trial
+            └── tuning_summary.png             # Multi-panel comprehensive summary
+
+Note: The search method subdirectory is overwritten when re-running the same
+      model + search method combination. Other search method results are preserved.
+Note: The diagnostics_summary.txt includes runtime in seconds, minutes, and hours.
+
+Examples:
+    # Grid search with default config
+    python tune_hyperparameters.py
+
+    # Quick grid search (reduced grid, fewer trials)
+    python tune_hyperparameters.py --quick
+
+    # Bayesian optimization (edit tuning_config.yaml: search_method: "bayesian")
+    python tune_hyperparameters.py
+
+    # Genetic algorithm (edit tuning_config.yaml: search_method: "genetic")
+    python tune_hyperparameters.py
+
+    # Use a custom config file
+    python tune_hyperparameters.py --config path/to/custom_tuning_config.yaml
 
 
 ================================================================================
@@ -492,16 +593,16 @@ Solution: Reduce batch size (--batch_size 16 or --batch_size 8)
 
 Issue: Training is too slow
 Solution:
-    - Reduce num_workers in conf/img_class_config.yaml
+    - Reduce num_workers in conf/training_config.yaml
     - Use smaller model (mobilenet_v2 instead of resnet50)
-    - Reduce image size in conf/img_class_config.yaml
+    - Reduce image size in conf/training_config.yaml
 
 Issue: Model not improving
 Solution:
     - Check if data is properly split (run 01b_image_train_val_test_split.py)
     - Try different learning rate (--lr 0.0001 or --lr 0.01)
     - Increase patience (--patience 15)
-    - Add more data augmentation in conf/img_class_config.yaml
+    - Add more data augmentation in conf/training_config.yaml
 
 Issue: Overfitting (train accuracy >> validation accuracy)
 Solution:
@@ -561,37 +662,884 @@ SECTION 7: CODE ORGANIZATION
 
 Project Structure:
     house_classification/
-    ├── 01_image_scrapper.py          # Data collection
-    ├── 01a_image_cleanup.py          # Data cleaning
+    ├── 01_image_scrapper.py               # Data collection
+    ├── 01a_image_cleanup.py               # Data cleaning
     ├── 01b_image_train_val_test_split.py  # Data splitting
-    ├── model.py                      # Model architectures
-    ├── train.py                      # Training script
-    ├── evaluate.py                   # Evaluation script (interactive)
+    ├── model.py                           # Model architectures
+    ├── train.py                           # Training script
+    ├── evaluate.py                        # Evaluation script (interactive)
+    ├── tune_hyperparameters.py            # Hyperparameter tuning script
     └── utils/
-        ├── config.py                 # Configuration management
-        ├── data_loaders.py           # PyTorch data loaders
-        └── google_image_scrapper_utils.py  # Image scraping utilities
+        ├── config.py                      # Configuration management
+        ├── data_loaders.py                # PyTorch data loaders
+        └── google_image_scrapper_utils.py # Image scraping utilities
 
     conf/
-    └── img_class_config.yaml                     # Configuration file
+    ├── training_config.yaml               # Training configuration
+    └── tuning_config.yaml                 # Hyperparameter tuning configuration
 
-    checkpoints/                      # Training outputs (overwritten per model config)
+    checkpoints/                           # Training outputs (overwritten per model config)
     └── <model>_ep<e>_bs<b>_lr<lr>/
         ├── best_model.pth
         ├── final_model.pth
         ├── training_history.json
-        ├── training_diagnostics.txt  # Complete training configuration report
-        ├── image_batches/            # Sample augmented training images
+        ├── training_diagnostics.txt       # Config report + training runtime
+        ├── image_batches/                 # Sample augmented training images
         ├── results_best/
         └── results_final/
+
+    checkpoints_tuning/                    # Hyperparameter tuning outputs
+    └── <model_name>/
+        └── <search_method>/
+            ├── trials/                    # Individual trial checkpoints
+            ├── tuning_results.json
+            ├── diagnostics_summary.txt
+            └── *.png                      # Visualization plots
 
 
 Key Features:
     - Interactive training mode with model architecture selection prompts
     - Interactive evaluation with smart checkpoint selection and automatic model detection
+    - Hyperparameter tuning with grid search, Bayesian optimization, and genetic algorithm
+    - YAML-driven configuration for both training and tuning
     - Progress bars with tqdm for training visibility
     - Comprehensive visualizations and text reports
+    - Training runtime tracking (seconds, minutes, hours) in diagnostics
     - Organized results structure with model type subdirectories
     - Hyperparameter tracking in checkpoint directory names
     - Modular code organization with utils package
     - Full command-line interface for automation and scripting
+
+================================================================================
+SECTION 8: MODEL EXPLAINABILITY (GRAD-CAM)
+================================================================================
+
+8.1 OVERVIEW
+------------
+Script: house_classification/explain.py
+Module: house_classification/explainability/
+
+Purpose: Generate visual explanations of model predictions using Grad-CAM
+(Gradient-weighted Class Activation Mapping). Helps understand which regions
+of an image the model focuses on when making predictions.
+
+Use Cases:
+    - Debug misclassifications by visualizing where the model looks
+    - Validate that the model learns meaningful architectural features
+    - Generate interpretable explanations for end users
+    - Analyze model behavior on specific examples
+    - Create visual reports for model documentation
+
+
+8.2 INTERACTIVE MODE (RECOMMENDED)
+-----------------------------------
+Usage:
+    cd house_classification
+    python explain.py
+
+The script will guide you through:
+    1. Select checkpoint directory (sorted by most recent)
+    2. Choose best or final model
+    3. Select analysis mode:
+       - Single image explanation
+       - Misclassification analysis
+       - Batch processing
+    4. Provide additional inputs based on mode
+
+Interactive Session Example:
+    AVAILABLE MODEL CHECKPOINT DIRECTORIES
+    ======================================================================
+    1. efficientnet_b0_ep50_bs32_lr0.001 [best, final]
+    2. resnet18_ep30_bs32_lr0.001 [best, final]
+    ======================================================================
+
+    Select checkpoint directory (1-2): 1
+
+    SELECT MODEL CHECKPOINT
+    ======================================================================
+    1. best_model.pth - Best model (lowest validation loss)
+    2. final_model.pth - Final model (last epoch)
+    ======================================================================
+
+    Select checkpoint (1-2): 1
+
+    SELECT ANALYSIS MODE
+    ======================================================================
+    1. Single image explanation - Analyze one specific image
+    2. Misclassification analysis - Explain model errors from evaluation results
+    3. Batch processing - Analyze multiple images from a directory
+    ======================================================================
+
+    Select mode (1-3): 1
+
+    Please provide the path to the image you want to analyze:
+    Image path: architectural_style_images/test/georgian/georgian_96576.jpg
+
+
+8.3 ANALYSIS MODES
+------------------
+
+8.3.1 Single Image Explanation
+    Generates comprehensive visualization for one image showing:
+    - Original image with prediction and confidence
+    - Grad-CAM heatmap highlighting important regions
+    - Overlay of heatmap on the image
+    - Top-K predictions with confidence scores
+    - Class comparison showing how attention differs across top predictions
+
+    Command-Line Usage:
+        python explain.py \
+            --checkpoint checkpoints/resnet18_ep30_bs32_lr0.001/best_model.pth \
+            --mode single \
+            --image architectural_style_images/test/colonial/colonial_123.jpg \
+            --true_class colonial \
+            --top_k 5
+
+    Output Files (saved to checkpoints/.../explanations/single/):
+        - <image_name>_gradcam.png: Main visualization with 4 panels
+        - <image_name>_class_comparison.png: Attention comparison across top-K classes
+
+
+8.3.2 Misclassification Analysis
+    Automatically analyzes misclassified samples from evaluation results.
+    Helps understand why the model made errors.
+
+    Prerequisites:
+        - Run evaluate.py first to generate evaluation_results.json
+
+    Command-Line Usage:
+        python explain.py \
+            --checkpoint checkpoints/resnet18_ep30_bs32_lr0.001/best_model.pth \
+            --mode misclassifications \
+            --limit 20
+
+    What it does:
+        - Loads evaluation results to find misclassified samples
+        - Generates Grad-CAM for each misclassified image
+        - Shows true label vs predicted label
+        - Visualizes where the model focused its attention
+
+    Output Files (saved to checkpoints/.../explanations/misclassifications/):
+        - misclass_000_colonial_as_georgian.png
+        - misclass_001_tudor_as_gothic.png
+        - ... (one file per misclassification, up to limit)
+
+
+8.3.3 Batch Processing
+    Process multiple images from a directory at once.
+    Useful for analyzing a specific architectural style or custom image set.
+
+    Command-Line Usage:
+        python explain.py \
+            --checkpoint checkpoints/resnet18_ep30_bs32_lr0.001/best_model.pth \
+            --mode batch \
+            --image_dir architectural_style_images/test/colonial \
+            --true_class colonial \
+            --limit 50
+
+    Output Files (saved to checkpoints/.../explanations/batch/):
+        - batch_0000_image1_gradcam.png
+        - batch_0001_image2_gradcam.png
+        - ... (one file per image)
+
+
+8.4 OUTPUT STRUCTURE
+--------------------
+Results are organized in the checkpoint directory:
+
+    checkpoints/<model>_ep<e>_bs<b>_lr<lr>/
+    └── explanations/
+        ├── single/
+        │   ├── image_name_gradcam.png
+        │   └── image_name_class_comparison.png
+        ├── misclassifications/
+        │   ├── misclass_000_true_as_predicted.png
+        │   └── ...
+        └── batch/
+            ├── batch_0000_image_gradcam.png
+            └── ...
+
+
+8.5 COMMAND-LINE REFERENCE
+---------------------------
+All options:
+    --checkpoint PATH       Path to model checkpoint (.pth file)
+    --model NAME           Model architecture (auto-detected if not specified)
+    --mode MODE            Analysis mode: single, misclassifications, batch
+    --image PATH           Path to single image (for single mode)
+    --image_dir PATH       Directory of images (for batch mode)
+    --true_class NAME      True class label (optional, for validation)
+    --output_dir PATH      Custom output directory (default: checkpoint_dir/explanations/)
+    --limit N              Max images to process (default: 20 for misclassifications)
+    --top_k N              Number of top predictions to show (default: 5 for single mode)
+
+
+8.6 INTERPRETING GRAD-CAM VISUALIZATIONS
+-----------------------------------------
+
+Understanding the Heatmap:
+    - RED/WARM colors: Regions the model focuses on most strongly
+    - BLUE/COOL colors: Regions the model considers less important
+    - The heatmap shows attention for the PREDICTED class (not true class)
+
+What to Look For:
+    ✓ GOOD signs:
+        - Model focuses on architecturally meaningful features:
+          * Columns, pediments (Greek Revival, Colonial)
+          * Half-timbering, steep gables (Tudor Revival)
+          * Pointed arches, vertical elements (Gothic)
+          * Dormer windows, steep roofs (Cape Cod)
+        - Attention is on the building, not background/context
+        - Consistent attention patterns across similar images
+
+    ✗ WARNING signs:
+        - Model focuses on irrelevant features (sky, trees, cars)
+        - Attention is on image artifacts or borders
+        - Erratic or scattered attention patterns
+        - Different attention for same architectural style
+
+Class Comparison Insights:
+    - When comparing top predictions, observe how attention SHIFTS
+    - Different classes should highlight different architectural elements
+    - If attention is identical across classes, model may be uncertain
+
+
+8.7 PRACTICAL WORKFLOWS
+------------------------
+
+Workflow 1: Debug a Specific Misclassification
+    1. Run evaluation to identify errors
+    2. Use single image mode on the misclassified image
+    3. Examine class comparison to see what confused the model
+    4. Decide if more training data is needed for that style
+
+Workflow 2: Validate Model Learning
+    1. Use batch mode on test set for each architectural style
+    2. Review multiple examples to ensure consistent attention patterns
+    3. Verify model focuses on correct architectural features
+    4. Document findings for model validation report
+
+Workflow 3: Systematic Error Analysis
+    1. Run misclassification mode after evaluation
+    2. Group errors by confusion pairs (e.g., Colonial vs Georgian)
+    3. Identify common patterns in model mistakes
+    4. Use insights to improve data collection or model architecture
+
+Workflow 4: Production Model Documentation
+    1. Generate explanations for representative examples of each class
+    2. Create visual documentation showing model behavior
+    3. Use for stakeholder presentations or model cards
+    4. Demonstrate model trustworthiness and interpretability
+
+
+8.8 TIPS AND BEST PRACTICES
+----------------------------
+
+1. Always run evaluation BEFORE misclassification analysis
+   - The explain.py script needs evaluation_results.json
+
+2. Start with single image mode to understand the visualization
+   - Pick a high-confidence correct prediction first
+   - Then try a misclassification
+
+3. Use the class comparison feature to understand confusion
+   - Shows how attention differs between top predicted classes
+   - Reveals which features distinguish similar styles
+
+4. For batch analysis, limit the number of images initially
+   - Start with --limit 10 to test
+   - Increase once you confirm output quality
+
+5. Model architecture is auto-detected from checkpoint path
+   - No need to specify --model unless overriding
+   - Works for all supported architectures (ResNet, EfficientNet, etc.)
+
+6. Custom output directories help organize experiments
+   - Use --output_dir for specific analyses
+   - Default organization is usually sufficient
+
+7. Combine with evaluation metrics for complete understanding
+   - High accuracy + meaningful attention = good model
+   - High accuracy + scattered attention = potential overfitting
+   - Low accuracy + wrong attention = need more/better data
+
+
+8.9 TECHNICAL DETAILS
+---------------------
+
+Supported Architectures:
+    - VanillaCNN (custom baseline)
+    - ResNet (18, 34, 50, 101, 152)
+    - EfficientNet (B0, B1, B2, B3, B4)
+    - MobileNet (V2, V3)
+    - VGG (11, 13, 16, 19)
+
+Target Layer Selection:
+    - Automatically selects the optimal convolutional layer
+    - Typically the last conv layer before classification head
+    - Provides best balance of spatial resolution and semantic information
+
+Memory Management:
+    - Hooks are automatically cleaned up after processing
+    - Figures are closed to prevent memory leaks
+    - Safe for processing large batches
+
+Integration:
+    - Uses same preprocessing pipeline as training/evaluation
+    - Inherits normalization config from training_config.yaml
+    - Compatible with all trained model checkpoints
+
+
+8.10 TROUBLESHOOTING
+--------------------
+
+Issue: "No evaluation results found"
+Solution: Run evaluate.py first before using misclassification analysis mode
+
+Issue: "Could not detect model type from directory"
+Solution: Ensure checkpoint is in a directory named with the pattern:
+          {model}_ep{epochs}_bs{batch_size}_lr{lr}
+          Or specify --model manually
+
+Issue: "Out of memory" during batch processing
+Solution: Reduce --limit to process fewer images at once
+
+Issue: Heatmap looks wrong or scattered
+Solution: 
+    - Verify the model is well-trained (check evaluation metrics)
+    - Ensure image is from the correct domain (architectural photos)
+    - Try different images to see if it's an isolated case
+
+Issue: Class comparison shows identical heatmaps
+Solution: This indicates model uncertainty - predictions are likely
+          similar confidence. Model may need more training or data.
+
+
+================================================================================
+SECTION 9: UPDATED CODE ORGANIZATION
+================================================================================
+
+Project Structure (Updated):
+    house_classification/
+    ├── 01_image_scrapper.py               # Data collection
+    ├── 01a_image_cleanup.py               # Data cleaning
+    ├── 01b_image_train_val_test_split.py  # Data splitting
+    ├── model.py                           # Model architectures
+    ├── train.py                           # Training script
+    ├── evaluate.py                        # Evaluation script
+    ├── tune_hyperparameters.py            # Hyperparameter tuning
+    ├── explain.py                         # Model explainability (NEW)
+    ├── explainability/                    # Explainability module (NEW)
+    │   ├── __init__.py
+    │   ├── gradcam.py                     # Core Grad-CAM implementation
+    │   ├── visualizers.py                 # Visualization utilities
+    │   └── layer_selectors.py             # Target layer selection
+    └── utils/
+        ├── config.py                      # Configuration management
+        ├── data_loaders.py                # PyTorch data loaders
+        └── google_image_scrapper_utils.py # Image scraping utilities
+
+    conf/
+    ├── training_config.yaml               # Training configuration
+    └── tuning_config.yaml                 # Hyperparameter tuning config
+
+    checkpoints/                           # Training outputs
+    └── <model>_ep<e>_bs<b>_lr<lr>/
+        ├── best_model.pth
+        ├── final_model.pth
+        ├── training_history.json
+        ├── training_diagnostics.txt
+        ├── image_batches/
+        ├── results_best/
+        ├── results_final/
+        └── explanations/                  # Grad-CAM outputs (NEW)
+            ├── single/
+            ├── misclassifications/
+            └── batch/
+
+    notebooks/                             # Jupyter notebooks
+    ├── grad_cam_analysis.ipynb            # Original Grad-CAM prototype
+    ├── model_training.ipynb
+    └── ...
+
+
+Updated Pipeline Flow:
+    1. Data Preparation
+       → 01_image_scrapper.py
+       → 01a_image_cleanup.py
+       → 01b_image_train_val_test_split.py
+
+    2. Model Training
+       → train.py (or tune_hyperparameters.py)
+
+    3. Model Evaluation
+       → evaluate.py
+
+    4. Model Explainability (NEW)
+       → explain.py
+       ├─→ Single image analysis
+       ├─→ Misclassification debugging
+       └─→ Batch visualization
+
+
+Key Features of Explainability Module:
+    - Production-ready Grad-CAM implementation
+    - Interactive mode with user-friendly prompts
+    - Full command-line interface for automation
+    - Automatic model architecture detection
+    - Multiple analysis modes (single, misclassifications, batch)
+    - Publication-quality visualizations
+    - Class comparison across top predictions
+    - Organized output structure
+    - Memory-efficient batch processing
+    - Integration with existing evaluation pipeline
+    - Support for all trained model architectures
+
+
+================================================================================
+SECTION 10: MLFLOW EXPERIMENT TRACKING
+================================================================================
+
+10.1 OVERVIEW
+-------------
+MLflow is now integrated across the entire training pipeline for experiment
+tracking and management. All training runs, hyperparameter tuning sessions,
+evaluations, and explainability analyses can be automatically logged to MLflow.
+
+Benefits:
+    - Track all experiments in one place
+    - Compare models and hyperparameters easily
+    - Reproducible experiments with logged parameters
+    - Visualize training curves and metrics
+    - Store model artifacts and visualizations
+    - Web UI for browsing and comparing runs
+
+Configuration:
+    - Enabled by default (can be configured in conf/training_config.yaml)
+    - Interactive prompts ask if you want to track (unless explicitly enabled/disabled via CLI)
+    - Uses local ./mlruns directory by default
+    - Can be configured to use remote tracking server
+
+
+10.2 CONFIGURATION
+------------------
+MLflow configuration is in conf/training_config.yaml:
+
+    mlflow:
+      enabled: true                                # Enable by default
+      tracking_uri: null                           # null = local ./mlruns
+      experiment_name: "architectural-style-training"
+
+Three-Tier Priority System:
+    1. CLI flags (highest priority)
+       --mlflow or --no_mlflow explicitly enable/disable
+
+    2. Interactive prompt
+       If config says enabled=true and no CLI flag, user is prompted
+
+    3. Config file (lowest priority)
+       If enabled=false in config and no CLI flag, MLflow is disabled
+
+This means you can:
+    - Set it once in config and forget about it
+    - Be prompted interactively each time
+    - Override with --mlflow or --no_mlflow for specific runs
+
+
+10.3 TRAINING WITH MLFLOW
+--------------------------
+Script: house_classification/train.py
+
+Interactive Mode (Default):
+    cd house_classification
+    python train.py
+
+    You'll be prompted:
+    1. Select model architecture
+    2. Enable MLflow tracking? (Yes/No)
+
+    Example:
+    ======================================================================
+    MLFLOW EXPERIMENT TRACKING
+    ======================================================================
+    MLflow tracks all training metrics, parameters, and artifacts.
+    You can view results later with: mlflow ui
+    ======================================================================
+    1. Yes - Enable MLflow tracking (recommended)
+    2. No - Skip MLflow tracking
+    ======================================================================
+
+    Enable MLflow tracking? (1-2): 1
+    ✓ MLflow tracking enabled
+
+Command-Line Mode:
+    # Enable MLflow explicitly
+    python train.py --model resnet18 --mlflow
+
+    # Disable MLflow explicitly
+    python train.py --model resnet18 --no_mlflow
+
+    # Use remote tracking server
+    python train.py --model resnet18 --mlflow \
+        --mlflow_tracking_uri "http://localhost:5000" \
+        --mlflow_experiment "my-experiment"
+
+What Gets Logged:
+    - Parameters: model architecture, batch size, learning rate, epochs, etc.
+    - Metrics (per epoch): train/val loss, train/val accuracy, learning rate
+    - Final metrics: best validation accuracy, total training time
+    - Artifacts: best model checkpoint, training history JSON, diagnostics, sample images
+    - Tags: model type, task (image_classification), dataset, class names
+    - Training curves visualization
+
+
+10.4 HYPERPARAMETER TUNING WITH MLFLOW
+---------------------------------------
+Script: house_classification/tune_hyperparameters.py
+
+Interactive Mode:
+    python tune_hyperparameters.py
+
+    Prompts:
+    1. Select model architecture
+    2. Enable MLflow tracking? (Yes/No)
+
+Command-Line Mode:
+    # Enable MLflow for tuning
+    python tune_hyperparameters.py --mlflow
+
+    # Use custom experiment name
+    python tune_hyperparameters.py --mlflow \
+        --mlflow_experiment "resnet18-tuning-v2"
+
+What Gets Logged:
+    - Parent run: Overall tuning session
+      * Parameters: search method, search space, number of trials
+      * Metrics: best validation accuracy, mean/std across trials
+      * Artifacts: tuning results JSON, visualizations
+
+    - Nested runs: Each individual trial
+      * Parameters: learning rate, dropout rate, batch size
+      * Metrics: validation accuracy, validation loss, best epoch
+      * Links to parent run for organization
+
+
+10.5 EVALUATION WITH MLFLOW
+----------------------------
+Script: house_classification/evaluate.py
+
+Interactive Mode:
+    python evaluate.py
+
+    Prompts:
+    1. Select checkpoint
+    2. Generate plots? (Yes/No)
+    3. Enable MLflow tracking? (Yes/No)
+
+Command-Line Mode:
+    python evaluate.py \
+        --checkpoint checkpoints/resnet18_ep30_bs32_lr0.001/best_model.pth \
+        --plot \
+        --mlflow
+
+What Gets Logged:
+    - Parameters: model architecture, checkpoint path, number of classes
+    - Metrics: test accuracy, test loss, per-class precision/recall/F1
+    - Artifacts: evaluation results JSON, summary text, all visualization plots
+    - Tags: model architecture, checkpoint location
+
+
+10.6 VIEWING RESULTS IN MLFLOW UI
+----------------------------------
+Start the MLflow UI:
+    cd /Users/tawate/Documents/Architecture_Image_Modeling
+    mlflow ui
+
+Open browser to: http://localhost:5000
+
+Navigation:
+    1. Select experiment from sidebar
+       - architectural-style-training (training runs)
+       - architectural-style-tuning (hyperparameter tuning)
+       - architectural-style-evaluation (evaluation runs)
+       - architectural-style-explainability (Grad-CAM analyses)
+
+    2. Browse runs in main panel
+       - Sort by metrics (accuracy, loss, etc.)
+       - Filter by parameters
+       - Compare multiple runs
+
+    3. Click on a run to see details
+       - Parameters used
+       - Metrics over time
+       - Artifacts (models, plots, configs)
+       - Tags and metadata
+
+Comparing Runs:
+    1. Select multiple runs using checkboxes
+    2. Click "Compare" button
+    3. View side-by-side comparison of:
+       - Parameter differences
+       - Metric differences
+       - Visualizations
+
+
+10.7 MLFLOW WORKFLOW EXAMPLES
+------------------------------
+
+Example 1: Track Multiple Training Runs
+    # Train baseline
+    python train.py --model vanilla --epochs 50 --mlflow
+
+    # Train ResNet variants
+    python train.py --model resnet18 --epochs 30 --mlflow
+    python train.py --model resnet34 --epochs 30 --mlflow
+    python train.py --model resnet50 --epochs 30 --mlflow
+
+    # View and compare in MLflow UI
+    mlflow ui
+    # Select all runs -> Compare -> See which model performed best
+
+Example 2: Hyperparameter Tuning with Tracking
+    # Run tuning with MLflow
+    python tune_hyperparameters.py --mlflow
+
+    # View in MLflow UI
+    mlflow ui
+    # Navigate to tuning experiment
+    # See parent run with all trials as nested runs
+    # Sort trials by val_accuracy to find best config
+
+Example 3: Full Pipeline with MLflow
+    # Train with MLflow
+    python train.py --model resnet18 --epochs 30 --mlflow
+
+    # Evaluate with MLflow
+    python evaluate.py \
+        --checkpoint checkpoints/resnet18_ep30_bs32_lr0.001/best_model.pth \
+        --plot --mlflow
+
+    # View complete experiment in MLflow UI
+    mlflow ui
+    # Link training and evaluation runs by timestamp or tags
+
+Example 4: Production Model Validation
+    # Test production model with MLflow tracking
+    python evaluate.py \
+        --checkpoint production_models/resnet18_v2.pth \
+        --mlflow \
+        --mlflow_experiment "production-validation" \
+        --plot
+
+
+10.8 REMOTE MLFLOW SERVER (OPTIONAL)
+-------------------------------------
+For team collaboration, set up a remote MLflow tracking server:
+
+On Server:
+    # Install MLflow
+    pip install mlflow
+
+    # Start tracking server
+    mlflow server \
+        --host 0.0.0.0 \
+        --port 5000 \
+        --backend-store-uri sqlite:///mlflow.db \
+        --default-artifact-root ./mlartifacts
+
+On Client (Training Machine):
+    # Set tracking URI via environment variable
+    export MLFLOW_TRACKING_URI="http://server-ip:5000"
+
+    # Or via command-line flag
+    python train.py --model resnet18 --mlflow \
+        --mlflow_tracking_uri "http://server-ip:5000"
+
+Benefits of Remote Server:
+    - Team members see all experiments
+    - Centralized model registry
+    - Persistent storage
+    - Better for production deployments
+
+
+10.9 MLFLOW CLI REFERENCE
+--------------------------
+Common CLI flags (work for train.py, evaluate.py, tune_hyperparameters.py):
+
+    --mlflow                    Enable MLflow tracking
+    --no_mlflow                 Disable MLflow tracking
+    --mlflow_tracking_uri URI   Tracking server URI (default: local ./mlruns)
+    --mlflow_experiment NAME    Experiment name (default from config)
+
+Examples:
+    # Enable with defaults
+    python train.py --model resnet18 --mlflow
+
+    # Disable explicitly
+    python train.py --model resnet18 --no_mlflow
+
+    # Custom experiment
+    python train.py --model resnet18 --mlflow \
+        --mlflow_experiment "architectural-v2"
+
+    # Remote server
+    python train.py --model resnet18 --mlflow \
+        --mlflow_tracking_uri "http://mlflow-server:5000"
+
+
+10.10 TIPS AND BEST PRACTICES
+------------------------------
+1. Use descriptive experiment names
+   - Group related runs together
+   - Example: "resnet18-baseline", "resnet18-augmented", etc.
+
+2. Tag your runs appropriately
+   - Runs are auto-tagged with model architecture and task
+   - Add custom tags in MLflow UI for better organization
+
+3. Link related runs
+   - Training → Evaluation → Explainability
+   - Use consistent naming conventions
+
+4. Clean up old experiments periodically
+   - MLflow accumulates runs over time
+   - Archive or delete unsuccessful experiments
+
+5. Back up mlruns directory
+   - Contains all your experiment data
+   - Critical for reproducibility
+
+6. Use config file for team consistency
+   - Set enabled: true in conf/training_config.yaml
+   - Everyone gets prompted automatically
+
+7. Disable MLflow for quick tests
+   - Use --no_mlflow for debugging runs
+   - Keeps experiment tracking clean
+
+8. View training curves during training
+   - Start mlflow ui in another terminal
+   - Refresh to see live metrics
+   - Helps monitor long-running experiments
+
+
+10.11 TROUBLESHOOTING
+---------------------
+Issue: MLflow UI shows no experiments
+Solution: Make sure you're running "mlflow ui" from the project root directory
+         where mlruns/ folder exists
+
+Issue: Cannot connect to remote tracking server
+Solution: Check server is running and firewall allows port 5000
+         Verify tracking URI is correct (http://server-ip:5000)
+
+Issue: Runs not showing up in UI
+Solution: Refresh the page or restart mlflow ui
+         Check that training completed successfully
+
+Issue: Artifacts not loading
+Solution: Ensure artifact paths are absolute or relative to tracking URI
+         Check file permissions in mlruns/ directory
+
+Issue: Multiple users overwriting runs
+Solution: Use unique experiment names per user or feature
+         Consider setting up remote server with auth
+
+
+10.12 ADDITIONAL RESOURCES
+---------------------------
+For more detailed MLflow documentation including:
+    - Advanced queries and filtering
+    - Model registry for production deployment
+    - Linking related runs across pipeline stages
+    - Custom logging examples
+    - Programmatic access to experiments
+
+See: Documentation/MLFLOW_COMPLETE_GUIDE.md
+
+
+================================================================================
+SECTION 11: COMPLETE WORKFLOW WITH MLFLOW
+================================================================================
+
+End-to-End Example with Experiment Tracking:
+
+Step 1: Data Preparation (No MLflow)
+    cd house_classification
+    python 01_image_scrapper.py
+    python 01a_image_cleanup.py
+    python 01b_image_train_val_test_split.py
+
+Step 2: Configure MLflow (One-time setup)
+    Edit conf/training_config.yaml:
+        mlflow:
+          enabled: true
+          tracking_uri: null  # or "http://your-server:5000"
+          experiment_name: "architectural-style-training"
+
+Step 3: Train Models with MLflow
+    # Baseline
+    python train.py --model vanilla --epochs 50
+    [Prompt: Enable MLflow? → Yes]
+
+    # Transfer learning
+    python train.py --model resnet18 --epochs 30
+    [Prompt: Enable MLflow? → Yes]
+
+    python train.py --model efficientnet_b0 --epochs 30
+    [Prompt: Enable MLflow? → Yes]
+
+Step 4: Evaluate Models with MLflow
+    python evaluate.py --plot
+    [Select vanilla checkpoint → Enable MLflow? → Yes]
+
+    python evaluate.py --plot
+    [Select resnet18 checkpoint → Enable MLflow? → Yes]
+
+    python evaluate.py --plot
+    [Select efficientnet checkpoint → Enable MLflow? → Yes]
+
+Step 5: View and Compare in MLflow UI
+    mlflow ui
+    # Open http://localhost:5000
+    # Compare all training runs
+    # Compare all evaluation runs
+    # Identify best performing model
+
+Step 6: Hyperparameter Tuning for Best Model
+    python tune_hyperparameters.py
+    [Select resnet18 → Enable MLflow? → Yes]
+
+    # View tuning results in MLflow UI
+    # Find optimal hyperparameters
+
+Step 7: Train Final Model with Best Config
+    python train.py --model resnet18 \
+        --lr 0.001 --dropout 0.5 --batch_size 32 \
+        --epochs 50 --mlflow
+
+Step 8: Final Evaluation
+    python evaluate.py \
+        --checkpoint checkpoints/resnet18_ep50_bs32_lr0.001/best_model.pth \
+        --plot --mlflow
+
+Step 9: Model Explainability with MLflow
+    python explain.py \
+        --checkpoint checkpoints/resnet18_ep50_bs32_lr0.001/best_model.pth \
+        --mode misclassifications \
+        --mlflow
+
+Step 10: Review Complete Experiment History
+    mlflow ui
+    # Browse all runs
+    # Generate reports
+    # Document model performance
+    # Archive or deploy best model
+
+
+This workflow ensures all experiments are tracked, reproducible, and comparable!
+
+================================================================================
+END OF RUNBOOK
+================================================================================
+

@@ -246,6 +246,29 @@ def get_model_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {**defaults, **model_config}
 
 
+def get_mlflow_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Get MLflow configuration.
+
+    Args:
+        config: Configuration dictionary. If None, loads from default location.
+
+    Returns:
+        dict: MLflow settings (enabled, tracking_uri, experiment_name).
+    """
+    if config is None:
+        config = load_config()
+
+    defaults = {
+        "enabled": True,
+        "tracking_uri": None,
+        "experiment_name": "architectural-style-training"
+    }
+
+    mlflow_config = config.get("mlflow", {})
+    return {**defaults, **mlflow_config}
+
+
 def load_tuning_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Load tuning configuration from YAML file.

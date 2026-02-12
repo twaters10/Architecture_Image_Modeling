@@ -34,9 +34,10 @@ import torch.nn as nn
 import numpy as np
 
 # Local imports
-from utils.config import load_config, get_data_paths
+from utils.config import load_config, get_data_paths, get_mlflow_config
 from utils.data_loaders import get_data_loaders
 from model import VanillaCNN, get_pretrained_model
+from utils.mlflow_training import log_evaluation_run
 
 
 def get_device() -> torch.device:
@@ -888,6 +889,39 @@ def prompt_plot_generation() -> bool:
             return False
 
 
+def prompt_mlflow_tracking() -> bool:
+    """
+    Prompt user whether to enable MLflow tracking.
+
+    Returns:
+        bool: True if MLflow should be enabled, False otherwise.
+    """
+    print("\n" + "=" * 70)
+    print("MLFLOW EXPERIMENT TRACKING")
+    print("=" * 70)
+    print("MLflow tracks all evaluation metrics, parameters, and artifacts.")
+    print("You can view results later with: mlflow ui")
+    print("=" * 70)
+    print("1. Yes - Enable MLflow tracking (recommended)")
+    print("2. No - Skip MLflow tracking")
+    print("=" * 70)
+
+    while True:
+        try:
+            choice = input("\nEnable MLflow tracking? (1-2): ").strip()
+            if choice == "1":
+                print("✓ MLflow tracking enabled")
+                return True
+            elif choice == "2":
+                print("✗ MLflow tracking disabled")
+                return False
+            else:
+                print("Please enter 1 or 2.")
+        except (ValueError, KeyboardInterrupt):
+            print("\nDefaulting to no MLflow tracking")
+            return False
+
+
 def main():
     """Main entry point for evaluation script."""
     # Load config for defaults
@@ -920,8 +954,46 @@ def main():
         "--output_dir", type=str, default=None,
         help="Directory to save evaluation results (default from config)"
     )
+    parser.add_argument(
+        "--mlflow", action="store_true",
+        help="Enable MLflow experiment tracking"
+    )
+    parser.add_argument(
+        "--no_mlflow", action="store_true",
+        help="Disable MLflow experiment tracking"
+    )
+    parser.add_argument(
+        "--mlflow_tracking_uri", type=str, default=None,
+        help="MLflow tracking server URI (default: from config or local ./mlruns)"
+    )
+    parser.add_argument(
+        "--mlflow_experiment", type=str, default=None,
+        help="MLflow experiment name (default: from config)"
+    )
 
     args = parser.parse_args()
+
+    # Load MLflow configuration
+    mlflow_config = get_mlflow_config(config)
+
+    # Determine if MLflow should be enabled (priority: CLI > interactive > config)
+    mlflow_enabled = False
+    if args.no_mlflow:
+        # Explicitly disabled via CLI
+        mlflow_enabled = False
+    elif args.mlflow:
+        # Explicitly enabled via CLI
+        mlflow_enabled = True
+    elif mlflow_config.get("enabled", True):
+        # Config says enabled, prompt user
+        mlflow_enabled = prompt_mlflow_tracking()
+    else:
+        # Config says disabled
+        mlflow_enabled = False
+
+    # Use config defaults if not provided via CLI
+    mlflow_tracking_uri = args.mlflow_tracking_uri or mlflow_config.get("tracking_uri")
+    mlflow_experiment = args.mlflow_experiment or mlflow_config.get("experiment_name", "architectural-style-evaluation")
 
     print("=" * 60)
     print("Architectural Style Classification - Evaluation")
@@ -952,6 +1024,7 @@ def main():
     print(f"Model: {args.model}")
     print(f"Batch size: {args.batch_size}")
     print(f"Generate plots: {'Yes' if args.plot else 'No'}")
+    print(f"MLflow tracking: {'enabled' if mlflow_enabled else 'disabled'}")
 
     # Determine output directory and filenames
     checkpoint_path = Path(args.checkpoint)
@@ -1061,6 +1134,21 @@ def main():
             plot_training_history(str(history_path), save_path=str(training_history_path))
         else:
             print("\nNote: training_history.json not found - skipping training history plot")
+
+    # Log to MLflow if enabled
+    if mlflow_enabled:
+        print("\n" + "=" * 60)
+        print("Logging to MLflow...")
+        print("=" * 60)
+
+        log_evaluation_run(
+            model_name=args.model,
+            checkpoint_path=checkpoint_path,
+            results=results,
+            output_dir=output_path,
+            tracking_uri=mlflow_tracking_uri,
+            experiment_name=mlflow_experiment
+        )
 
     print("\nEvaluation complete!")
     print(f"\nAll results saved to: {output_path}")
