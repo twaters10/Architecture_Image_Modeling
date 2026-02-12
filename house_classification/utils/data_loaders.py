@@ -173,7 +173,7 @@ def get_data_loaders(
     Loads settings from conf/training_config.yaml by default. Parameters passed to this
     function override the config file values.
 
-    Expects directory structure created by 01b_image_train_val_test_split.py:
+    Expects directory structure created by data_prep/splitter.py:
         data_dir/
         ├── train/
         │   ├── american_craftsman/
@@ -234,7 +234,7 @@ def get_data_loaders(
         if not split_dir.exists():
             raise FileNotFoundError(
                 f"{split_name} directory not found at {split_dir}. "
-                "Run 01b_image_train_val_test_split.py first."
+                "Run prepare_data.py --split first."
             )
 
     # Create datasets with appropriate transforms
@@ -699,4 +699,4 @@ if __name__ == "__main__":
 
     except FileNotFoundError as e:
         print(f"\nError: {e}")
-        print("Please run 01b_image_train_val_test_split.py first to create the splits.")
+        print("Please run prepare_data.py --split first to create the splits.")

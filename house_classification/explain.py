@@ -193,7 +193,7 @@ def get_class_names_from_data_dir() -> List[str]:
     if not train_dir.exists():
         raise FileNotFoundError(
             f"Training directory not found: {train_dir}\n"
-            "Please ensure data is prepared using 01b_image_train_val_test_split.py"
+            "Please ensure data is prepared using prepare_data.py --split"
         )
 
     class_names = sorted([d.name for d in train_dir.iterdir() if d.is_dir()])
@@ -357,7 +357,7 @@ def explain_misclassifications(
 
     if not test_dir.exists():
         print(f"\nERROR: Test directory not found: {test_dir}")
-        print("Please ensure data is prepared using 01b_image_train_val_test_split.py")
+        print("Please ensure data is prepared using prepare_data.py --split")
         return
 
     # Initialize
@@ -909,7 +909,7 @@ def main():
                 top_k=args.top_k
             )
 
-    elif mode == "misclassifications":
+        elif mode == "misclassifications":
             # Log mode-specific parameters
             if mlflow_enabled:
                 mlflow_logger.log_params({

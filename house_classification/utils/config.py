@@ -269,6 +269,32 @@ def get_mlflow_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
     return {**defaults, **mlflow_config}
 
 
+def load_apikeys_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Load API keys and paths configuration from apikeys.yaml.
+
+    Args:
+        config_path: Path to the YAML config file. If None, loads from
+            the default location (conf/apikeys.yaml in project root).
+
+    Returns:
+        dict: Configuration dictionary with api_keys and paths.
+
+    Raises:
+        FileNotFoundError: If the config file doesn't exist.
+    """
+    if config_path is None:
+        config_path = get_project_root() / "conf" / "apikeys.yaml"
+    else:
+        config_path = Path(config_path)
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"API keys config not found: {config_path}")
+
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
 def load_tuning_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Load tuning configuration from YAML file.

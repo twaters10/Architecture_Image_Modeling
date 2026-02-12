@@ -43,7 +43,7 @@ import torch
 from utils.config import load_tuning_config, get_data_paths, load_config, get_mlflow_config
 from utils.data_loaders import get_data_loaders
 from model import VanillaCNN, get_pretrained_model, count_parameters
-from utils.mlflow_training import log_hyperparameter_tuning
+from utils.mlflow_training import log_hyperparameter_tuning, prompt_experiment_selection
 from train import train, get_device, prompt_model_selection
 
 
@@ -1294,7 +1294,15 @@ def main():
 
     # Use config defaults if not provided via CLI
     mlflow_tracking_uri = args.mlflow_tracking_uri or mlflow_config.get("tracking_uri")
-    mlflow_experiment = args.mlflow_experiment or mlflow_config.get("experiment_name", "architectural-style-tuning")
+
+    # Experiment name: CLI arg > interactive prompt > config default
+    if args.mlflow_experiment:
+        mlflow_experiment = args.mlflow_experiment
+    elif mlflow_enabled:
+        default_name = mlflow_config.get("experiment_name", "architectural-style-tuning")
+        mlflow_experiment = prompt_experiment_selection(default_name)
+    else:
+        mlflow_experiment = mlflow_config.get("experiment_name", "architectural-style-tuning")
 
     # Interactive model selection
     model_name = prompt_model_selection()
@@ -1368,100 +1376,133 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     trials_dir.mkdir(parents=True, exist_ok=True)
 
-    # Dispatch to search method
-    if search_method == "grid_search":
-        results = run_grid_search(
-            model_name=model_name,
-            search_space=search_space,
-            num_classes=num_classes,
-            tuning_config=tuning,
-            output_dir=str(output_dir),
-            device=device
-        )
-    elif search_method == "bayesian":
-        results = run_bayesian_search(
-            model_name=model_name,
-            search_space=search_space,
-            num_classes=num_classes,
-            tuning_config=tuning,
-            bayesian_config=bayesian_cfg,
-            output_dir=str(output_dir),
-            device=device
-        )
-    elif search_method == "genetic":
-        results = run_genetic_search(
-            model_name=model_name,
-            search_space=search_space,
-            num_classes=num_classes,
-            tuning_config=tuning,
-            genetic_config=genetic_cfg,
-            output_dir=str(output_dir),
-            device=device
-        )
-    else:
-        raise ValueError(
-            f"Unknown search method: {search_method}. "
-            "Supported: grid_search, bayesian, genetic"
-        )
+    # Helper to run the selected search method
+    def _run_tuning():
+        if search_method == "grid_search":
+            return run_grid_search(
+                model_name=model_name,
+                search_space=search_space,
+                num_classes=num_classes,
+                tuning_config=tuning,
+                output_dir=str(output_dir),
+                device=device
+            )
+        elif search_method == "bayesian":
+            return run_bayesian_search(
+                model_name=model_name,
+                search_space=search_space,
+                num_classes=num_classes,
+                tuning_config=tuning,
+                bayesian_config=bayesian_cfg,
+                output_dir=str(output_dir),
+                device=device
+            )
+        elif search_method == "genetic":
+            return run_genetic_search(
+                model_name=model_name,
+                search_space=search_space,
+                num_classes=num_classes,
+                tuning_config=tuning,
+                genetic_config=genetic_cfg,
+                output_dir=str(output_dir),
+                device=device
+            )
+        else:
+            raise ValueError(
+                f"Unknown search method: {search_method}. "
+                "Supported: grid_search, bayesian, genetic"
+            )
 
-    # Save results JSON
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    results_file = output_path / "tuning_results.json"
-    with open(results_file, "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"\nResults saved to: {results_file}")
+    # Helper to save results, diagnostics, and plots
+    def _save_results(results):
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        results_file = output_path / "tuning_results.json"
+        with open(results_file, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"\nResults saved to: {results_file}")
 
-    # Write diagnostics summary
-    write_diagnostics_summary(results, str(output_dir))
+        write_diagnostics_summary(results, str(output_dir))
 
-    # Generate visualizations
-    if not no_plots:
-        print("\nGenerating visualizations...")
-        plot_tuning_heatmaps(results, str(output_dir))
-        plot_top_configurations(results, str(output_dir))
-        plot_best_training_curves(results, str(output_dir))
-        plot_tuning_summary(results, str(output_dir))
+        if not no_plots:
+            print("\nGenerating visualizations...")
+            plot_tuning_heatmaps(results, str(output_dir))
+            plot_top_configurations(results, str(output_dir))
+            plot_best_training_curves(results, str(output_dir))
+            plot_tuning_summary(results, str(output_dir))
 
-    # Print final summary
-    print("\n" + "=" * 60)
-    print("TUNING COMPLETE")
-    print("=" * 60)
-    meta = results["metadata"]
-    print(f"Search method: {meta['search_method']}")
-    print(f"Total trials: {meta['total_trials']}")
-    print(f"Successful: {meta['successful_trials']}")
-    print(f"Failed: {meta['failed_trials']}")
-    print(f"Total time: {meta['total_tuning_time_minutes']:.1f} minutes")
-
-    best = results.get("best_trial")
-    if best:
-        hp = best["hyperparameters"]
-        print(f"\nBest Configuration:")
-        print(f"  Learning rate: {hp['learning_rate']}")
-        print(f"  Dropout rate: {hp['dropout_rate']}")
-        print(f"  Batch size: {hp['batch_size']}")
-        print(f"  Val accuracy: {best['best_val_accuracy']:.2f}%")
-        print(f"  Val loss: {best['best_val_loss']:.4f}")
-
-    print(f"\nResults saved to: {output_dir}/")
-
-    # Log to MLflow if enabled
-    if mlflow_enabled:
+    # Helper to print final summary
+    def _print_summary(results):
         print("\n" + "=" * 60)
-        print("Logging to MLflow...")
+        print("TUNING COMPLETE")
         print("=" * 60)
+        meta = results["metadata"]
+        print(f"Search method: {meta['search_method']}")
+        print(f"Total trials: {meta['total_trials']}")
+        print(f"Successful: {meta['successful_trials']}")
+        print(f"Failed: {meta['failed_trials']}")
+        print(f"Total time: {meta['total_tuning_time_minutes']:.1f} minutes")
 
-        log_hyperparameter_tuning(
-            model_name=model_name,
-            search_method=search_method,
-            search_space=search_space,
-            results=results.get("trials", []),
-            best_config=best["hyperparameters"] if best else {},
-            output_dir=Path(output_dir),
-            tracking_uri=mlflow_tracking_uri,
-            experiment_name=mlflow_experiment
-        )
+        best = results.get("best_trial")
+        if best:
+            hp = best["hyperparameters"]
+            print(f"\nBest Configuration:")
+            print(f"  Learning rate: {hp['learning_rate']}")
+            print(f"  Dropout rate: {hp['dropout_rate']}")
+            print(f"  Batch size: {hp['batch_size']}")
+            print(f"  Val accuracy: {best['best_val_accuracy']:.2f}%")
+            print(f"  Val loss: {best['best_val_loss']:.4f}")
+
+        print(f"\nResults saved to: {output_dir}/")
+
+    # Tuning + MLflow logging
+    # MLflow's built-in system metrics require tuning to happen INSIDE mlflow.start_run().
+    if mlflow_enabled:
+        import mlflow
+
+        # Setup MLflow tracking
+        if mlflow_tracking_uri:
+            mlflow.set_tracking_uri(mlflow_tracking_uri)
+        mlflow.set_experiment(mlflow_experiment)
+
+        # Enable built-in system metrics BEFORE starting the run
+        mlflow.enable_system_metrics_logging()
+        mlflow.set_system_metrics_sampling_interval(5)
+        mlflow.set_system_metrics_samples_before_logging(1)
+
+        print(f"\nMLflow system metrics logging enabled (sampling every 5s)")
+
+        # Start parent run, tune inside it, then log results
+        with mlflow.start_run(
+            run_name=f"{model_name}_{search_method}_tuning",
+            log_system_metrics=True
+        ):
+            results = _run_tuning()
+
+            _save_results(results)
+            _print_summary(results)
+
+            # Log to MLflow
+            print("\n" + "=" * 60)
+            print("Logging to MLflow...")
+            print("=" * 60)
+
+            best = results.get("best_trial")
+            log_hyperparameter_tuning(
+                model_name=model_name,
+                search_method=search_method,
+                search_space=search_space,
+                results=results.get("all_trials", []),
+                best_config=best["hyperparameters"] if best else {},
+                output_dir=Path(output_dir),
+            )
+
+            print(f"\n  Tuning logged to MLflow experiment: {mlflow_experiment}")
+    else:
+        # Tune without MLflow
+        results = _run_tuning()
+        _save_results(results)
+        _print_summary(results)
 
 
 if __name__ == "__main__":

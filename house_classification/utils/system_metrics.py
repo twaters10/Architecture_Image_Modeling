@@ -237,26 +237,73 @@ class SystemMetricsMonitor:
         return metrics
 
     def _collect_gpu_metrics_mps(self) -> Dict[str, float]:
-        """Collect GPU metrics via PyTorch MPS (Apple Silicon)."""
+        """Collect GPU metrics via PyTorch MPS + macOS ioreg (Apple Silicon)."""
         import torch
         metrics = {}
         try:
-            # Current memory allocated by tensors
+            # PyTorch MPS memory metrics
             allocated = torch.mps.current_allocated_memory()
             metrics["gpu_0_memory_allocated_gb"] = allocated / (1024 ** 3)
             metrics["gpu_0_memory_allocated_mb"] = allocated / (1024 ** 2)
 
-            # Total memory allocated by the MPS driver (includes caches)
             driver_allocated = torch.mps.driver_allocated_memory()
             metrics["gpu_0_memory_driver_allocated_gb"] = driver_allocated / (1024 ** 3)
             metrics["gpu_0_memory_driver_allocated_mb"] = driver_allocated / (1024 ** 2)
 
-            # Memory utilization ratio (allocated / driver_allocated)
             if driver_allocated > 0:
                 metrics["gpu_0_memory_utilization_percent"] = (allocated / driver_allocated) * 100
+        except Exception:
+            pass
 
-        except Exception as e:
-            print(f"Warning: Could not collect MPS GPU metrics: {e}")
+        # macOS ioreg GPU utilization and memory (works without root)
+        try:
+            metrics.update(self._collect_apple_gpu_ioreg())
+        except Exception:
+            pass
+
+        return metrics
+
+    def _collect_apple_gpu_ioreg(self) -> Dict[str, float]:
+        """Parse Apple GPU stats from ioreg (Device/Renderer/Tiler utilization, memory)."""
+        import subprocess
+        import re
+
+        metrics = {}
+        result = subprocess.run(
+            ["ioreg", "-r", "-d", "1", "-c", "IOAccelerator"],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode != 0:
+            return metrics
+
+        output = result.stdout
+
+        # Extract PerformanceStatistics block
+        perf_match = re.search(r'"PerformanceStatistics"\s*=\s*\{([^}]+)\}', output)
+        if not perf_match:
+            return metrics
+
+        perf_block = perf_match.group(1)
+
+        # Parse key-value pairs: "Key"=Value
+        for key, metric_name in [
+            ("Device Utilization %", "gpu_0_device_utilization_percent"),
+            ("Renderer Utilization %", "gpu_0_renderer_utilization_percent"),
+            ("Tiler Utilization %", "gpu_0_tiler_utilization_percent"),
+        ]:
+            match = re.search(rf'"{re.escape(key)}"\s*=\s*(\d+)', perf_block)
+            if match:
+                metrics[metric_name] = float(match.group(1))
+
+        # Memory stats from ioreg
+        for key, metric_name in [
+            ("In use system memory", "gpu_0_ioreg_in_use_memory_gb"),
+            ("Alloc system memory", "gpu_0_ioreg_alloc_memory_gb"),
+        ]:
+            match = re.search(rf'"{re.escape(key)}"\s*=\s*(\d+)', perf_block)
+            if match:
+                metrics[metric_name] = int(match.group(1)) / (1024 ** 3)
+
         return metrics
 
     def collect_metrics(self) -> Dict[str, float]:
@@ -474,10 +521,26 @@ def get_system_info() -> Dict[str, str]:
     try:
         import torch
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            import platform
             info["gpu_count"] = 1
             info["gpu_backend"] = "apple_mps"
-            info["gpu_0_name"] = f"Apple Silicon ({platform.processor() or 'M-series'})"
+
+            # Get GPU model and core count from ioreg
+            try:
+                import subprocess, re
+                result = subprocess.run(
+                    ["ioreg", "-r", "-d", "1", "-c", "IOAccelerator"],
+                    capture_output=True, text=True, timeout=2
+                )
+                model_match = re.search(r'"model"\s*=\s*"([^"]+)"', result.stdout)
+                cores_match = re.search(r'"gpu-core-count"\s*=\s*(\d+)', result.stdout)
+                model_name = model_match.group(1) if model_match else "Apple Silicon"
+                core_count = int(cores_match.group(1)) if cores_match else None
+                info["gpu_0_name"] = model_name
+                if core_count:
+                    info["gpu_0_core_count"] = core_count
+            except Exception:
+                info["gpu_0_name"] = "Apple Silicon"
+
             return info
     except Exception:
         pass

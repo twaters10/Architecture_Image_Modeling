@@ -46,7 +46,7 @@ from utils.config import (
 )
 from utils.data_loaders import get_data_loaders, save_sample_batches, save_training_diagnostics, append_training_runtime
 from model import VanillaCNN, get_pretrained_model, count_parameters
-from utils.mlflow_training import log_training_run, TrainingMetricsMonitor
+from utils.mlflow_training import log_training_run, prompt_experiment_selection
 
 
 def get_device() -> torch.device:
@@ -187,7 +187,7 @@ def train(
     weight_decay: float = 1e-4,
     patience: int = 10,
     checkpoint_dir: str = "checkpoints",
-    device: Optional[torch.device] = None
+    device: Optional[torch.device] = None,
 ) -> Tuple[Dict, float]:
     """
     Complete training loop with validation and early stopping.
@@ -499,7 +499,15 @@ def main():
 
     # Use config defaults if not provided via CLI
     mlflow_tracking_uri = args.mlflow_tracking_uri or mlflow_config.get("tracking_uri")
-    mlflow_experiment = args.mlflow_experiment or mlflow_config.get("experiment_name", "architectural-style-training")
+
+    # Experiment name: CLI arg > interactive prompt > config default
+    if args.mlflow_experiment:
+        mlflow_experiment = args.mlflow_experiment
+    elif mlflow_enabled:
+        default_name = mlflow_config.get("experiment_name", "architectural-style-training")
+        mlflow_experiment = prompt_experiment_selection(default_name)
+    else:
+        mlflow_experiment = mlflow_config.get("experiment_name", "architectural-style-training")
 
     # Prompt for model selection if not provided via CLI
     if args.model is None:
@@ -578,9 +586,66 @@ def main():
         config=config
     )
 
-    # Train the model with system metrics monitoring (CPU, GPU, memory, etc.)
-    system_metrics_summary = None
-    with TrainingMetricsMonitor(interval=5.0, enable_gpu=True) as metrics_monitor:
+    # Training + MLflow logging
+    # MLflow's built-in system metrics (CPU, memory, disk, network) require training
+    # to happen INSIDE mlflow.start_run() so the background monitor can capture them.
+    if mlflow_enabled:
+        import mlflow
+
+        # Setup MLflow tracking
+        if mlflow_tracking_uri:
+            mlflow.set_tracking_uri(mlflow_tracking_uri)
+        mlflow.set_experiment(mlflow_experiment)
+
+        # Enable built-in system metrics BEFORE starting the run
+        mlflow.enable_system_metrics_logging()
+        mlflow.set_system_metrics_sampling_interval(5)
+        mlflow.set_system_metrics_samples_before_logging(1)
+
+        print(f"\nMLflow system metrics logging enabled (sampling every 5s)")
+
+        # Start run, train inside it, then log results — all in one run context
+        with mlflow.start_run(run_name=f"{args.model}_training", log_system_metrics=True):
+            history, total_time = train(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                num_epochs=args.epochs,
+                learning_rate=args.lr,
+                patience=args.patience,
+                checkpoint_dir=str(checkpoint_dir),
+            )
+
+            # Append training runtime to diagnostics file
+            append_training_runtime(checkpoint_dir, total_time)
+
+            # Log params, metrics, artifacts to the active run
+            print("\n" + "=" * 60)
+            print("Logging to MLflow...")
+            print("=" * 60)
+
+            training_config = {
+                "batch_size": args.batch_size,
+                "learning_rate": args.lr,
+                "weight_decay": train_config.get("weight_decay", 1e-4),
+                "epochs": args.epochs,
+                "patience": args.patience,
+                "freeze_features": args.freeze_features
+            }
+
+            log_training_run(
+                model_name=args.model,
+                model=model,
+                history=history,
+                config=training_config,
+                checkpoint_dir=checkpoint_dir,
+                class_names=class_names,
+                total_time=total_time,
+            )
+
+            print(f"\n  Training run logged to MLflow experiment: {mlflow_experiment}")
+    else:
+        # Train without MLflow
         history, total_time = train(
             model=model,
             train_loader=train_loader,
@@ -590,38 +655,9 @@ def main():
             patience=args.patience,
             checkpoint_dir=str(checkpoint_dir)
         )
-        system_metrics_summary = metrics_monitor.get_summary()
 
-    # Append training runtime to diagnostics file
-    append_training_runtime(checkpoint_dir, total_time)
-
-    # Log to MLflow if enabled
-    if mlflow_enabled:
-        print("\n" + "=" * 60)
-        print("Logging to MLflow...")
-        print("=" * 60)
-
-        training_config = {
-            "batch_size": args.batch_size,
-            "learning_rate": args.lr,
-            "weight_decay": train_config.get("weight_decay", 1e-4),
-            "epochs": args.epochs,
-            "patience": args.patience,
-            "freeze_features": args.freeze_features
-        }
-
-        log_training_run(
-            model_name=args.model,
-            model=model,
-            history=history,
-            config=training_config,
-            checkpoint_dir=checkpoint_dir,
-            class_names=class_names,
-            total_time=total_time,
-            tracking_uri=mlflow_tracking_uri,
-            experiment_name=mlflow_experiment,
-            system_metrics_summary=system_metrics_summary
-        )
+        # Append training runtime to diagnostics file
+        append_training_runtime(checkpoint_dir, total_time)
 
     print(f"\nCheckpoints saved to: {checkpoint_dir}/")
     print("\nTraining complete!")
