@@ -118,7 +118,7 @@ def run_single_trial(
 
     try:
         # Create data loaders with trial-specific batch size
-        train_loader, val_loader, _, _ = get_data_loaders(batch_size=bs)
+        train_loader, val_loader, _, _, _ = get_data_loaders(batch_size=bs)
 
         # Create model with trial-specific dropout
         model = create_model_with_dropout(
@@ -1324,7 +1324,7 @@ def main():
     device = get_device()
 
     # Get num_classes from dataset
-    _, _, _, class_names = get_data_loaders(batch_size=32)
+    _, _, _, class_names, _ = get_data_loaders(batch_size=32)
     num_classes = len(class_names)
 
     # Print configuration

@@ -70,7 +70,8 @@ def train_one_epoch(
     criterion: nn.Module,
     optimizer: optim.Optimizer,
     device: torch.device,
-    epoch: int = 0
+    epoch: int = 0,
+    cutmix_transform=None
 ) -> Tuple[float, float]:
     """
     Train the model for one epoch.
@@ -91,16 +92,26 @@ def train_one_epoch(
     correct = 0
     total = 0
 
+    # Import cutmix_criterion for handling soft labels
+    from utils.data_loaders import cutmix_criterion
+
     # Create progress bar for batches
     pbar = tqdm(train_loader, desc=f"Epoch {epoch} [Train]", leave=False)
 
     for images, labels in pbar:
-        images, labels = images.to(device), labels.to(device)
+        images = images.to(device)
+        labels = labels.to(device)
+
+        # Apply CutMix if enabled
+        if cutmix_transform is not None:
+            images, labels = cutmix_transform(images, labels)
 
         # Forward pass
         optimizer.zero_grad()
         outputs = model(images)
-        loss = criterion(outputs, labels)
+
+        # Calculate loss (handles both soft and hard labels)
+        loss = cutmix_criterion(outputs, labels, criterion)
 
         # Backward pass
         loss.backward()
@@ -109,8 +120,17 @@ def train_one_epoch(
         # Statistics
         running_loss += loss.item() * images.size(0)
         _, predicted = outputs.max(1)
-        total += labels.size(0)
-        correct += predicted.eq(labels).sum().item()
+        total += images.size(0)
+
+        # For accuracy calculation with soft labels, use argmax
+        if labels.dim() == 2:
+            # Soft labels from CutMix
+            hard_labels = labels.argmax(dim=1)
+        else:
+            # Hard labels
+            hard_labels = labels
+
+        correct += predicted.eq(hard_labels).sum().item()
 
         # Update progress bar with current metrics
         current_acc = 100.0 * correct / total
@@ -188,6 +208,7 @@ def train(
     patience: int = 10,
     checkpoint_dir: str = "checkpoints",
     device: Optional[torch.device] = None,
+    cutmix_transform=None,
 ) -> Tuple[Dict, float]:
     """
     Complete training loop with validation and early stopping.
@@ -202,6 +223,7 @@ def train(
         patience: Epochs to wait for improvement before early stopping. Defaults to 10.
         checkpoint_dir: Directory to save model checkpoints. Defaults to "checkpoints".
         device: Device to train on. Defaults to best available.
+        cutmix_transform: CutMix transform object if enabled. Defaults to None.
 
     Returns:
         Tuple of (history, total_time) where:
@@ -261,7 +283,8 @@ def train(
 
         # Train
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, epoch=epoch + 1
+            model, train_loader, criterion, optimizer, device, epoch=epoch + 1,
+            cutmix_transform=cutmix_transform
         )
 
         # Validate
@@ -528,7 +551,7 @@ def main():
 
     # Load data
     print("\nLoading data...")
-    train_loader, val_loader, _, class_names = get_data_loaders(
+    train_loader, val_loader, _, class_names, cutmix_transform = get_data_loaders(
         batch_size=args.batch_size
     )
     num_classes = len(class_names)
@@ -574,7 +597,7 @@ def main():
     )
 
     # Save training diagnostics
-    _, _, test_loader_for_diag, _ = get_data_loaders(batch_size=args.batch_size)
+    _, _, test_loader_for_diag, _, _ = get_data_loaders(batch_size=args.batch_size)
     save_training_diagnostics(
         output_dir=checkpoint_dir,
         train_loader=train_loader,
@@ -614,6 +637,7 @@ def main():
                 learning_rate=args.lr,
                 patience=args.patience,
                 checkpoint_dir=str(checkpoint_dir),
+                cutmix_transform=cutmix_transform,
             )
 
             # Append training runtime to diagnostics file
@@ -653,7 +677,8 @@ def main():
             num_epochs=args.epochs,
             learning_rate=args.lr,
             patience=args.patience,
-            checkpoint_dir=str(checkpoint_dir)
+            checkpoint_dir=str(checkpoint_dir),
+            cutmix_transform=cutmix_transform
         )
 
         # Append training runtime to diagnostics file

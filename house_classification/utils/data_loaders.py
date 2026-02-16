@@ -11,12 +11,26 @@ Augmentations Applied (Training):
     - Color jitter (brightness, contrast, saturation)
     - Random resized crop
     - Normalization (ImageNet statistics)
+    - CutMix (optional): Image-mixing augmentation that replaces random patches
 
 Augmentations Applied (Validation/Test):
     - Resize and center crop
     - Normalization (ImageNet statistics)
 
-Usage:
+CutMix Augmentation:
+    CutMix is an advanced image-mixing technique that:
+    - Replaces a random rectangular region of one image with a patch from another
+    - Mixes labels proportionally to the area of the cut region
+    - Prevents overconfidence and improves generalization
+
+    Enable in conf/training_config.yaml:
+        augmentation:
+          cutmix:
+            enabled: true
+            alpha: 1.0
+            prob: 0.5
+
+Basic Usage:
     from data_loaders import get_data_loaders
 
     train_loader, val_loader, test_loader, class_names = get_data_loaders(
@@ -25,18 +39,49 @@ Usage:
         image_size=224
     )
 
+CutMix Usage in Training Loop:
+    train_loader, val_loader, test_loader, class_names = get_data_loaders(
+        use_cutmix=True
+    )
+
+    for images, targets_info in train_loader:
+        images = images.to(device)
+
+        if isinstance(targets_info, dict):
+            # CutMix was applied
+            target_a = targets_info['target_a'].to(device)
+            target_b = targets_info['target_b'].to(device)
+            lam = targets_info['lam']
+
+            outputs = model(images)
+            loss = criterion(outputs, target_a) * lam + \
+                   criterion(outputs, target_b) * (1 - lam)
+        else:
+            # Normal batch (no CutMix)
+            targets = targets_info.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, targets)
+
 Requirements:
     - torch
     - torchvision
     - pillow
+    - numpy
 """
 
 from pathlib import Path
 from typing import Optional, Tuple, List, Union, Dict, Any
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+try:
+    from torchvision.transforms import v2 as transforms_v2
+    CUTMIX_AVAILABLE = True
+except ImportError:
+    CUTMIX_AVAILABLE = False
 
 # Local imports
 from .config import (
@@ -74,6 +119,100 @@ class ConvertImageMode:
             img = img.convert('RGB')
 
         return img
+
+
+# ============================================================================
+# CUTMIX AUGMENTATION (using PyTorch built-in)
+# ============================================================================
+
+class CutMixTransform:
+    """
+    Wrapper for PyTorch's built-in CutMix transform.
+
+    This provides a simple interface compatible with our training loop.
+    Uses torchvision.transforms.v2.CutMix for the actual implementation.
+
+    Usage:
+        cutmix = CutMixTransform(num_classes=10, alpha=1.0)
+
+        # In training loop:
+        for images, labels in train_loader:
+            images, labels = cutmix(images, labels)
+            # labels is now a dict with 'target_a', 'target_b', 'lam' if applied
+    """
+
+    def __init__(self, num_classes, alpha=1.0):
+        """
+        Initialize CutMix transform.
+
+        Args:
+            num_classes: Number of classes in the dataset
+            alpha: Beta distribution parameter (default: 1.0)
+        """
+        if not CUTMIX_AVAILABLE:
+            raise ImportError(
+                "CutMix requires torchvision >= 0.15.0 with transforms v2. "
+                "Please upgrade: pip install --upgrade torchvision"
+            )
+
+        self.num_classes = num_classes
+        self.cutmix = transforms_v2.CutMix(num_classes=num_classes, alpha=alpha)
+
+    def __call__(self, images, labels):
+        """
+        Apply CutMix to a batch.
+
+        Args:
+            images: Batch of images (B, C, H, W)
+            labels: Batch of labels (B,) as integers
+
+        Returns:
+            Tuple of (images, labels_dict) where labels_dict contains:
+                - Original labels mixed according to CutMix
+        """
+        # PyTorch's CutMix expects one-hot encoded labels
+        # It returns mixed images and mixed one-hot labels
+        mixed_images, mixed_labels = self.cutmix(images, labels)
+
+        # For compatibility with our training loop, we need to extract
+        # the mixing information. PyTorch's CutMix returns soft labels
+        # which are already mixed, so we can use them directly
+        return mixed_images, mixed_labels
+
+
+def cutmix_criterion(outputs, targets, criterion):
+    """
+    Calculate loss for batches with CutMix augmentation.
+
+    Compatible with PyTorch's built-in CutMix which returns soft labels.
+
+    Args:
+        outputs: Model outputs (B, num_classes) - logits
+        targets: Either soft labels (B, num_classes) from CutMix or
+                 hard labels (B,) for normal batches
+        criterion: Loss function (e.g., nn.CrossEntropyLoss())
+
+    Returns:
+        loss: Computed loss value
+
+    Example:
+        for images, labels in train_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+            loss = cutmix_criterion(outputs, labels, criterion)
+            loss.backward()
+    """
+    # Check if targets are soft labels (CutMix applied) or hard labels
+    if targets.dim() == 2 and targets.size(1) > 1:
+        # Soft labels from CutMix - use cross entropy with soft targets
+        loss = -(targets * F.log_softmax(outputs, dim=1)).sum(dim=1).mean()
+    else:
+        # Hard labels - normal cross entropy
+        loss = criterion(outputs, targets)
+
+    return loss
 
 
 def get_train_transforms(
@@ -165,8 +304,9 @@ def get_data_loaders(
     batch_size: Optional[int] = None,
     image_size: Optional[int] = None,
     num_workers: Optional[int] = None,
-    pin_memory: Optional[bool] = None
-) -> Tuple[DataLoader, DataLoader, DataLoader, List[str]]:
+    pin_memory: Optional[bool] = None,
+    use_cutmix: Optional[bool] = None
+) -> Tuple[DataLoader, DataLoader, DataLoader, List[str], Optional[CutMixTransform]]:
     """
     Create PyTorch DataLoaders for train, validation, and test sets.
 
@@ -192,6 +332,7 @@ def get_data_loaders(
         num_workers: Number of worker processes for data loading. Defaults to config value.
         pin_memory: Whether to pin memory for faster GPU transfer. Defaults to config value.
             Note: Automatically disabled on MPS/CPU devices (only works with CUDA).
+        use_cutmix: Whether to use CutMix augmentation. Defaults to config value.
 
     Returns:
         Tuple containing:
@@ -199,12 +340,24 @@ def get_data_loaders(
             - val_loader: DataLoader for validation data
             - test_loader: DataLoader for test data
             - class_names: List of class names (architectural styles)
+            - cutmix_transform: CutMixTransform object if enabled, None otherwise
 
     Raises:
         FileNotFoundError: If the data directory or split directories don't exist.
+
+    Note:
+        When CutMix is enabled, apply the returned cutmix_transform in your training loop:
+            train_loader, val_loader, test_loader, class_names, cutmix = get_data_loaders(use_cutmix=True)
+
+            for images, labels in train_loader:
+                if cutmix is not None:
+                    images, labels = cutmix(images, labels)
+                # labels are now soft (mixed) if CutMix was applied
     """
     # Load configuration
+    config = load_config()
     loader_config = get_data_loader_config()
+    aug_config = get_augmentation_config()
     paths = get_data_paths()
 
     # Use config values as defaults, override with function parameters
@@ -212,6 +365,10 @@ def get_data_loaders(
     image_size = image_size if image_size is not None else loader_config["image_size"]
     num_workers = num_workers if num_workers is not None else loader_config["num_workers"]
     pin_memory = pin_memory if pin_memory is not None else loader_config["pin_memory"]
+
+    # CutMix configuration
+    cutmix_config = aug_config.get("cutmix", {})
+    use_cutmix = use_cutmix if use_cutmix is not None else cutmix_config.get("enabled", False)
 
     # Only use pin_memory with CUDA (not supported on MPS/CPU)
     # This avoids the warning: "pin_memory argument is set as true but not supported on MPS"
@@ -255,8 +412,22 @@ def get_data_loaders(
 
     # Get class names from training dataset
     class_names = train_dataset.classes
+    num_classes = len(class_names)
 
-    # Create data loaders
+    # Setup CutMix transform if enabled
+    cutmix_transform = None
+    if use_cutmix:
+        if not CUTMIX_AVAILABLE:
+            print("Warning: CutMix requires torchvision >= 0.15.0. Skipping CutMix.")
+        else:
+            cutmix_alpha = cutmix_config.get("alpha", 1.0)
+            cutmix_transform = CutMixTransform(
+                num_classes=num_classes,
+                alpha=cutmix_alpha
+            )
+            print(f"CutMix enabled: alpha={cutmix_alpha} (apply in training loop)")
+
+    # Create data loaders (no collate_fn needed - CutMix applied in training loop)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -281,7 +452,7 @@ def get_data_loaders(
         pin_memory=pin_memory
     )
 
-    return train_loader, val_loader, test_loader, class_names
+    return train_loader, val_loader, test_loader, class_names, cutmix_transform
 
 
 def get_dataset_info(data_dir: Optional[Union[str, Path]] = None) -> dict:
@@ -365,6 +536,8 @@ def save_sample_batches(
     class_indices = {class_name: idx for idx, class_name in enumerate(class_names)}
 
     # Iterate through batches to collect samples
+    # Note: CutMix is applied in training loop, not in data loader,
+    # so we always get normal (images, labels) format here
     for images, labels in train_loader:
         for img, label in zip(images, labels):
             class_name = class_names[label.item()]
@@ -679,7 +852,7 @@ if __name__ == "__main__":
 
         # Create data loaders (using config values)
         print("\nCreating data loaders...")
-        train_loader, val_loader, test_loader, class_names = get_data_loaders(
+        train_loader, val_loader, test_loader, class_names, cutmix = get_data_loaders(
             num_workers=0  # Use 0 for testing to avoid multiprocessing issues
         )
 

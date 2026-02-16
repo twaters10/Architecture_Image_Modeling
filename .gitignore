@@ -16,3 +16,5 @@ notebooks/
 /mlruns
 mlflow.db
 claude.md
+/explaina
+house_classification/explainability/README.md
